@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="max-w-3xl mx-auto bg-white border border-slate-200 rounded-2xl p-8 leading-relaxed space-y-4 text-slate-700">
+{% if page == 'privacy' %}
+  <h1 class="text-2xl font-bold text-slate-900">Maxfiylik siyosati</h1>
+  <p>{{ settings.APP_NAME }} ({{ settings.APP_URL }}) Instagram professional akkauntlari uchun avtomatik javob xizmatidir.</p>
+  <h2 class="font-semibold text-slate-900">Qanday ma'lumot yig'amiz</h2>
+  <ul class="list-disc list-inside">
+    <li>Ro'yxatdan o'tishda: email va ism.</li>
+    <li>Instagram ulanganda: akkaunt ID, username, ism, profil rasmi va access token (shifrlangan holda saqlanadi).</li>
+    <li>Ulangan akkauntga kelgan izoh va Direct xabarlar matni — faqat siz belgilagan qoidalarni tekshirish va javob yuborish uchun. Tarix sahifasi uchun qisqa jurnal saqlanadi.</li>
+  </ul>
+  <h2 class="font-semibold text-slate-900">Ma'lumotdan foydalanish</h2>
+  <p>Ma'lumotlar faqat xizmatni ko'rsatish uchun ishlatiladi, uchinchi shaxslarga sotilmaydi va berilmaydi.</p>
+  <h2 class="font-semibold text-slate-900">O'chirish</h2>
+  <p>Akkauntni paneldagi “Uzish” tugmasi bilan istalgan vaqtda uzishingiz mumkin — bunda token va qoidalar o'chiriladi. Batafsil: <a class="text-pink-600" href="/data-deletion">Ma'lumotlarni o'chirish</a>.</p>
+{% elif page == 'terms' %}
+  <h1 class="text-2xl font-bold text-slate-900">Foydalanish shartlari</h1>
+  <p>{{ settings.APP_NAME }} xizmatidan foydalanib, siz Instagram va Meta platformasi qoidalariga rioya qilishga rozilik bildirasiz.</p>
+  <ul class="list-disc list-inside">
+    <li>Xizmatdan spam, aldov yoki qonunga zid kontent tarqatish uchun foydalanish taqiqlanadi.</li>
+    <li>Avtomatik javoblar mazmuni uchun akkaunt egasi javobgar.</li>
+    <li>Meta API cheklovlari sababli ayrim xabarlar yetkazilmasligi mumkin.</li>
+    <li>Qoidalar buzilsa, hisob ogohlantirishsiz to'xtatilishi mumkin.</li>
+  </ul>
+{% else %}
+  <h1 class="text-2xl font-bold text-slate-900">Ma'lumotlarni o'chirish</h1>
+  {% if code %}
+    <p class="rounded-xl bg-emerald-50 text-emerald-700 px-4 py-3">So'rovingiz qabul qilindi va ma'lumotlar o'chirildi. Tasdiqlash kodi: <b>{{ code }}</b></p>
+  {% endif %}
+  <p>Ma'lumotlaringizni o'chirish uchun quyidagi usullardan birini tanlang:</p>
+  <ol class="list-decimal list-inside">
+    <li>Panelga kiring va akkaunt yonidagi “Uzish” tugmasini bosing — Instagram tokeni, qoidalar va tarix darhol o'chadi.</li>
+    <li>Instagram → Sozlamalar → Veb-saytlar uchun ruxsatlar → {{ settings.APP_NAME }} ilovasini olib tashlang. Biz avtomatik so'rov olamiz va ma'lumotlarni o'chiramiz.</li>
+  </ol>
+{% endif %}
+</article>
+{% endblock %}

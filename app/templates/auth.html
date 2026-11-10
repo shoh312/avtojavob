@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Ro‘yxatdan o‘tish' if mode == 'register' else 'Kirish' }} — {{ settings.APP_NAME }}{% endblock %}
+{% block content %}
+<div class="max-w-md mx-auto bg-white border border-slate-200 rounded-2xl p-8 mt-4">
+  <h1 class="text-2xl font-bold">{{ 'Ro‘yxatdan o‘tish' if mode == 'register' else 'Kirish' }}</h1>
+  <form method="post" action="/{{ mode }}" class="mt-6 space-y-4">
+    {% if mode == 'register' %}
+    <label class="block">
+      <span class="text-sm font-medium">Ismingiz</span>
+      <input name="name" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-pink-400">
+    </label>
+    {% endif %}
+    <label class="block">
+      <span class="text-sm font-medium">Email</span>
+      <input name="email" type="email" required class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-pink-400">
+    </label>
+    <label class="block">
+      <span class="text-sm font-medium">Parol</span>
+      <input name="password" type="password" required minlength="8" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-pink-400">
+    </label>
+    <button class="w-full py-3 rounded-xl brand-grad text-white font-semibold">
+      {{ 'Hisob yaratish' if mode == 'register' else 'Kirish' }}
+    </button>
+  </form>
+  <p class="mt-6 text-sm text-slate-500 text-center">
+    {% if mode == 'register' %}Hisobingiz bormi? <a href="/login" class="text-pink-600 font-medium">Kirish</a>
+    {% else %}Hisobingiz yo'qmi? <a href="/register" class="text-pink-600 font-medium">Ro'yxatdan o'tish</a>{% endif %}
+  </p>
+</div>
+{% endblock %}

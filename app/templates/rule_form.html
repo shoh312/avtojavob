@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Qoida — {{ settings.APP_NAME }}{% endblock %}
+{% block content %}
+{% set r = rule %}
+{% set cur_trigger = r.trigger if r and r.trigger else 'comment' %}
+{% set cur_mode = r.match_mode if r and r.match_mode else 'contains' %}
+<a href="/dashboard" class="text-sm text-slate-500 hover:text-slate-800">← Panelga qaytish</a>
+<h1 class="text-2xl font-bold mt-3">{{ 'Qoidani tahrirlash' if r and r.id else 'Yangi qoida' }}
+  <span class="text-slate-400 font-normal text-lg">· @{{ account.username }}</span></h1>
+
+<form method="post" class="mt-6 grid lg:grid-cols-3 gap-6">
+  <div class="lg:col-span-2 space-y-6">
+
+    <div class="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+      <label class="block">
+        <span class="text-sm font-medium">Qoida nomi</span>
+        <input name="name" value="{{ r.name if r else '' }}" placeholder="Masalan: Narx so'raganlar"
+               class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-pink-400">
+      </label>
+
+      <div>
+        <span class="text-sm font-medium">Qachon ishlaydi?</span>
+        <div class="mt-2 grid sm:grid-cols-2 gap-3">
+          {% for key, label in triggers.items() %}
+          <label class="flex items-center gap-3 border border-slate-200 rounded-xl px-4 py-3 cursor-pointer has-[:checked]:border-pink-400 has-[:checked]:bg-pink-50">
+            <input type="radio" name="trigger" value="{{ key }}" {{ 'checked' if cur_trigger == key }} class="accent-pink-600">
+            <span>{{ 'Postga izoh yozilganda' if key == 'comment' else 'Direct\'ga xabar kelganda' }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div data-show="comment">
+        <span class="text-sm font-medium">Qaysi post?</span>
+        <select name="media" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 bg-white">
+          <option value="">Barcha postlar va reels</option>
+          {% for m in media %}
+            {% set cap = (m.caption or m.media_type or '')|replace('\n', ' ') %}
+            <option value="{{ m.id }}::{{ cap[:80] }}" {{ 'selected' if r and r.media_id == m.id }}>
+              {{ m.timestamp[:10] if m.timestamp }} · {{ cap[:70] or m.id }}
+            </option>
+          {% endfor %}
+          {% if r and r.media_id and not (media|selectattr('id', 'equalto', r.media_id)|list) %}
+            <option value="{{ r.media_id }}::{{ r.media_caption }}" selected>{{ r.media_caption or r.media_id }}</option>
+          {% endif %}
+        </select>
+      </div>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+      <div>
+        <span class="text-sm font-medium">Moslik turi</span>
+        <select name="match_mode" id="match_mode" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 bg-white">
+          {% for key, label in modes.items() %}
+            <option value="{{ key }}" {{ 'selected' if cur_mode == key }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <label class="block" id="kw_block">
+        <span class="text-sm font-medium">Kalit so'zlar <span class="text-slate-400 font-normal">(vergul bilan ajrating)</span></span>
+        <input name="keywords" value="{{ r.keywords if r else '' }}" placeholder="narx, price, qancha, цена"
+               class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 font-mono focus:outline-none focus:ring-2 focus:ring-pink-400">
+        <span class="text-xs text-slate-400">Katta-kichik harf farqi yo'q. “narx” so'zi “narxi qancha?” ichida ham topiladi.</span>
+      </label>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+      <label class="block" data-show="comment">
+        <span class="text-sm font-medium">Izohga ochiq javob <span class="text-slate-400 font-normal">(ixtiyoriy, har qatorda bitta variant)</span></span>
+        <textarea name="comment_replies" rows="3" placeholder="Direct'ga yozdik {username} 📩&#10;Ma'lumot Direct'da ✅"
+                  class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-pink-400">{{ r.comment_replies if r else '' }}</textarea>
+        <span class="text-xs text-slate-400">Bir nechta variant yozsangiz, tasodifiy tanlanadi — Instagram buni spam deb hisoblamasligi uchun foydali.</span>
+      </label>
+      <label class="block">
+        <span class="text-sm font-medium">Direct xabar matni</span>
+        <textarea name="dm_text" rows="5" maxlength="1000" placeholder="Assalomu alaykum! Mahsulot narxi: 150 000 so'm. Buyurtma uchun: +998 ..."
+                  class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-pink-400">{{ r.dm_text if r else '' }}</textarea>
+      </label>
+    </div>
+
+    <button class="w-full sm:w-auto px-8 py-3 rounded-xl brand-grad text-white font-semibold">Saqlash</button>
+  </div>
+
+  <aside class="space-y-4 text-sm">
+    <div class="bg-white border border-slate-200 rounded-2xl p-5">
+      <h3 class="font-semibold">Qanday ishlaydi?</h3>
+      <ol class="mt-3 space-y-2 text-slate-600 list-decimal list-inside">
+        <li>Kimdir izoh yoki Direct yozadi.</li>
+        <li>Matnda kalit so'z bo'lsa — qoida ishga tushadi.</li>
+        <li>Izohga javob yoziladi va odamga Direct yuboriladi.</li>
+      </ol>
+    </div>
+    <div class="bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl p-5">
+      <h3 class="font-semibold">Cheklovlar</h3>
+      <ul class="mt-2 space-y-1.5 list-disc list-inside">
+        <li>Har bir izohga faqat 1 ta Direct yuboriladi.</li>
+        <li>Akkaunt uchun soatiga {{ settings.HOURLY_SEND_LIMIT }} tagacha avtojavob.</li>
+        <li><code>{username}</code> — izoh egasining nikiga almashadi.</li>
+      </ul>
+    </div>
+  </aside>
+</form>
+
+<script>
+  const form = document.currentScript.previousElementSibling;
+  function sync() {
+    const trig = form.querySelector('input[name=trigger]:checked').value;
+    form.querySelectorAll('[data-show]').forEach(el => el.hidden = el.dataset.show !== trig);
+    document.getElementById('kw_block').hidden = document.getElementById('match_mode').value === 'any';
+  }
+  form.addEventListener('change', sync);
+  sync();
+</script>
+{% endblock %}
