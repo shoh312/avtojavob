@@ -245,10 +245,21 @@ else
     if [ -n "$DNS_IP" ]; then
         EMAIL_ARGS=(--register-unsafely-without-email)
         [ -n "${CERTBOT_EMAIL:-}" ] && EMAIL_ARGS=(-m "$CERTBOT_EMAIL")
-        if certbot certonly --webroot -w "$WEBROOT" -d "$DOMAIN" --non-interactive --agree-tos \
-                "${EMAIL_ARGS[@]}" --deploy-hook "systemctl reload nginx" >/dev/null 2>&1; then
+        # Avval HTTP orqali domen shu serverga kelishini tekshiramiz
+        echo "ok-${SERVICE}" > "$WEBROOT/.well-known-test" 2>/dev/null || true
+        mkdir -p "$WEBROOT/.well-known/acme-challenge"
+        echo "ok" > "$WEBROOT/.well-known/acme-challenge/avtojavob-test"
+        if ! curl -fs --max-time 10 "http://${DOMAIN}/.well-known/acme-challenge/avtojavob-test" | grep -q ok; then
+            warn "http://${DOMAIN}/.well-known/... bu serverga yetib kelmayapti (DNS yoki boshqa nginx sozlamasi)."
+        fi
+        rm -f "$WEBROOT/.well-known/acme-challenge/avtojavob-test" "$WEBROOT/.well-known-test"
+
+        if CB_OUT="$(certbot certonly --webroot -w "$WEBROOT" -d "$DOMAIN" --non-interactive --agree-tos \
+                "${EMAIL_ARGS[@]}" --deploy-hook "systemctl reload nginx" 2>&1)"; then
             SSL_OK=1
             write_nginx
+        else
+            echo "$CB_OUT" | tail -15
         fi
     fi
 fi
