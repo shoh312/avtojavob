@@ -8,8 +8,10 @@ import sqlite3
 import tempfile
 
 _db = os.path.join(tempfile.mkdtemp(), "test.db")
+# TEST_DATABASE_URL=postgresql+psycopg://... bilan PostgreSQL'da ham ishga tushirish mumkin
+_TEST_DB = os.environ.get("TEST_DATABASE_URL") or f"sqlite:///{_db}"
 os.environ.update({
-    "DATABASE_URL": f"sqlite:///{_db}",
+    "DATABASE_URL": _TEST_DB,
     "IG_APP_ID": "123",
     "IG_APP_SECRET": "test-secret",
     "WEBHOOK_VERIFY_TOKEN": "verify-me",
@@ -17,13 +19,14 @@ os.environ.update({
 })
 
 # Eski (v1) sxemadagi jadval — yangi ustunlar avtomatik qo'shilishini tekshirish uchun
-_con = sqlite3.connect(_db)
-_con.execute("""CREATE TABLE rules (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL,
+if _TEST_DB.startswith("sqlite"):
+    _con = sqlite3.connect(_db)
+    _con.execute("""CREATE TABLE rules (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL,
     trigger VARCHAR(16) NOT NULL, keywords TEXT NOT NULL, match_mode VARCHAR(16) NOT NULL, media_id VARCHAR(64),
     media_caption VARCHAR(255) NOT NULL, comment_replies TEXT NOT NULL, dm_text TEXT NOT NULL, active BOOLEAN NOT NULL,
     hits INTEGER NOT NULL, created_at DATETIME NOT NULL)""")
-_con.commit()
-_con.close()
+    _con.commit()
+    _con.close()
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -35,7 +38,11 @@ from app.models import EventLog, IGAccount, Rule  # noqa: E402
 from app.security import encrypt  # noqa: E402
 
 IG_ID = "17841400000000001"
+# Haqiqiy Instagram mid'lari ~200 belgi bo'ladi
+LONG_MID = ("aWdfZAG1faXRlbToxOklHTWVzc2FnZAUlEOjE3ODQxNDAwMDAwMDAwMDE6MzQwMjgyMzY2ODQxNzEwMzAwOTQ5MTI4"
+            "MTk2MzA0NDQxMjQ4NDU0OjMxOTkwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw")
 calls: list[tuple] = []
+ACC: dict = {}
 profile = {"follows": False}
 
 
@@ -103,16 +110,18 @@ def test_rule_and_comment_flow(client):
         acc = IGAccount(user_id=1, ig_user_id=IG_ID, username="dokon", access_token_enc=encrypt("tok"))
         db.add(acc)
         db.commit()
+        ACC["id"] = acc.id
+    aid = ACC["id"]
 
-    page = client.get("/accounts/1/rules/new")
+    page = client.get(f"/accounts/{aid}/rules/new")
     assert page.status_code == 200 and "Yangi kolleksiya" in page.text and "Obuna tekshiruvi" in page.text
 
-    r = client.post("/accounts/1/rules/new", data={
+    r = client.post(f"/accounts/{ACC['id']}/rules/new", data={
         "name": "Narx", "trigger": "comment", "keywords": "narx, price", "match_mode": "contains",
         "media": "", "comment_replies": "Direct'ga yozdik {username}", "dm_text": "Narxi 100 000 so'm",
     })
     assert "Narx" in r.text
-    client.post("/accounts/1/rules/new", data={
+    client.post(f"/accounts/{ACC['id']}/rules/new", data={
         "name": "Salom", "trigger": "dm", "keywords": "salom", "match_mode": "contains", "dm_text": "Va alaykum assalom!",
     })
 
@@ -130,7 +139,7 @@ def test_rule_and_comment_flow(client):
     assert calls == []
 
     post_webhook(client, {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [
-        {"sender": {"id": "555"}, "recipient": {"id": IG_ID}, "timestamp": 1, "message": {"mid": "mid1", "text": "Salom!"}},
+        {"sender": {"id": "555"}, "recipient": {"id": IG_ID}, "timestamp": 1, "message": {"mid": LONG_MID + "m", "text": "Salom!"}},
         {"sender": {"id": IG_ID}, "recipient": {"id": "555"}, "timestamp": 1, "message": {"mid": "mid2", "text": "salom", "is_echo": True}},
     ]}]})
     assert calls == [("dm", "555", {"text": "Va alaykum assalom!"})]
@@ -141,7 +150,7 @@ def test_rule_and_comment_flow(client):
 
 
 def test_link_buttons(client):
-    r = client.post("/accounts/1/rules/new", data={
+    r = client.post(f"/accounts/{ACC['id']}/rules/new", data={
         "name": "Katalog", "trigger": "comment", "keywords": "katalog", "match_mode": "contains",
         "dm_text": "Mana katalog 👇",
         "btn_title": ["Katalog", "Telegram", ""], "btn_url": ["https://shop.uz", "https://t.me/shop", ""],
@@ -158,7 +167,7 @@ def test_link_buttons(client):
         {"type": "web_url", "title": "Telegram", "url": "https://t.me/shop"},
     ]
 
-    bad = client.post("/accounts/1/rules/new", data={
+    bad = client.post(f"/accounts/{ACC['id']}/rules/new", data={
         "name": "X", "trigger": "comment", "keywords": "x", "match_mode": "contains", "dm_text": "x",
         "btn_title": ["Nomi bor"], "btn_url": ["shop.uz"],
     })
@@ -166,7 +175,7 @@ def test_link_buttons(client):
 
 
 def test_follow_gate(client):
-    r = client.post("/accounts/1/rules/new", data={
+    r = client.post(f"/accounts/{ACC['id']}/rules/new", data={
         "name": "Sovg'a", "trigger": "comment", "keywords": "sovg'a", "match_mode": "contains",
         "dm_text": "Salom {username}! Sovg'ani olish uchun bosing", "follow_gate": "1",
         "gate_button": "Sovg'ani olish", "reward_text": "Rahmat! Mana sovg'a 🎁",
@@ -186,7 +195,7 @@ def test_follow_gate(client):
     # 2) obuna emas -> "obuna bo'ling" + profil + "obuna bo'ldim"
     calls.clear()
     profile["follows"] = False
-    post_webhook(client, postback_payload("pb1", f"G:{rule_id}"))
+    post_webhook(client, postback_payload(LONG_MID + "1", f"G:{rule_id}"))
     (kind, rid, msg), = calls
     assert (kind, rid) == ("dm", "555")
     btns = buttons_of(msg)
@@ -196,14 +205,14 @@ def test_follow_gate(client):
     # 3) obuna bo'ldi -> mukofot + havola
     calls.clear()
     profile["follows"] = True
-    post_webhook(client, postback_payload("pb2", f"G:{rule_id}", title="Obuna bo'ldim ✅"))
+    post_webhook(client, postback_payload(LONG_MID + "2", f"G:{rule_id}", title="Obuna bo'ldim ✅"))
     (_, _, msg), = calls
     assert msg["attachment"]["payload"]["text"] == "Rahmat! Mana sovg'a 🎁"
     assert buttons_of(msg) == [{"type": "web_url", "title": "Yuklab olish", "url": "https://shop.uz/gift.pdf"}]
 
     # takroriy postback va begona payload e'tiborsiz
     calls.clear()
-    post_webhook(client, postback_payload("pb2", f"G:{rule_id}"))
+    post_webhook(client, postback_payload(LONG_MID + "2", f"G:{rule_id}"))
     post_webhook(client, postback_payload("pb3", "G:99999"))
     post_webhook(client, postback_payload("pb4", "boshqa"))
     assert calls == []

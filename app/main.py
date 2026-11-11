@@ -139,13 +139,13 @@ def register_page(request: Request):
 def register(request: Request, name: str = Form(""), email: str = Form(...), password: str = Form(...),
              db: Session = Depends(get_db)):
     email = email.strip().lower()
-    if "@" not in email or len(password) < 8:
+    if "@" not in email or len(email) > 255 or len(password) < 8:
         flash(request, "Email to'g'ri bo'lishi va parol kamida 8 belgi bo'lishi kerak.", "error")
         return redirect("/register")
     if db.scalar(select(User).where(User.email == email)):
         flash(request, "Bu email bilan ro'yxatdan o'tilgan. Kiring.", "error")
         return redirect("/login")
-    user = User(email=email, name=name.strip(), password_hash=hash_password(password))
+    user = User(email=email, name=name.strip()[:120], password_hash=hash_password(password))
     db.add(user)
     db.commit()
     request.session.clear()
@@ -329,7 +329,7 @@ def _apply_form(rule: Rule, f: RuleForm) -> str | None:
         return "Tugmali xabar matni 640 belgidan oshmasin."
 
     media_id, caption = (f.media.split("::", 1) + [""])[:2] if f.media else (None, "")
-    rule.name = f.name.strip() or "Qoida"
+    rule.name = f.name.strip()[:120] or "Qoida"
     rule.trigger = f.trigger
     rule.keywords = keywords
     rule.match_mode = f.match_mode

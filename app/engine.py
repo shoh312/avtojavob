@@ -9,6 +9,7 @@ Oqim:
      • obuna emas:      "avval obuna bo'ling" + [Profilga o'tish] [Obuna bo'ldim ✅]
 """
 
+import hashlib
 import logging
 import random
 import re
@@ -62,6 +63,10 @@ def find_rule(db: Session, account: IGAccount, trigger: str, text: str, media_id
 
 def mark_processed(db: Session, key: str) -> bool:
     """True — yangi hodisa; False — avval ishlangan."""
+    # Instagram mid'lari ~200 belgi bo'ladi — ustunga sig'ishi uchun xeshlaymiz
+    if len(key) > 64:
+        prefix, _, rest = key.partition(":")
+        key = f"{prefix}:#{hashlib.sha256(rest.encode()).hexdigest()}"
     db.add(ProcessedEvent(key=key))
     try:
         db.commit()
@@ -69,6 +74,9 @@ def mark_processed(db: Session, key: str) -> bool:
     except IntegrityError:
         db.rollback()
         return False
+    except Exception:
+        db.rollback()
+        raise
 
 
 def sends_last_hour(db: Session, account_id: int) -> int:
