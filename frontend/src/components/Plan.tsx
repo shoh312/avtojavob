@@ -8,6 +8,11 @@ export function telegramLink(username: string, text: string) {
   return `https://t.me/${encodeURIComponent(username)}?text=${encodeURIComponent(text)}`
 }
 
+/** Telegram ilovasini to'g'ridan-to'g'ri ochadi — t.me bloklangan tarmoqlarda ham ishlaydi. */
+export function telegramAppLink(username: string, text: string) {
+  return `tg://resolve?domain=${encodeURIComponent(username)}&text=${encodeURIComponent(text)}`
+}
+
 const PLAN_STYLE: Record<string, string> = {
   trial: 'bg-amber-50 text-amber-700',
   pro: 'bg-brand-50 text-brand-700',

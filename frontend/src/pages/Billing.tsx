@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Check, Crown, Gift, MessageCircle, Send } from 'lucide-react'
+import { Check, Copy, Crown, ExternalLink, Gift, MessageCircle, Send } from 'lucide-react'
 import { api, type PlanKey, type Plans } from '../api'
 import { useAuth } from '../auth'
 import { useI18n, type TKey } from '../i18n'
-import { PageHeader, Spinner, useToast } from '../components/ui'
-import { PlanBadge, planStatus, telegramLink } from '../components/Plan'
+import { Modal, PageHeader, Spinner, useToast } from '../components/ui'
+import { PlanBadge, planStatus, telegramAppLink, telegramLink } from '../components/Plan'
 
 const FEATURES: Record<PlanKey, TKey[]> = {
   trial: ['bill.accounts1', 'bill.f_flows', 'bill.f_all', 'bill.f_contacts'],
@@ -17,6 +17,7 @@ export default function Billing() {
   const toast = useToast()
   const { me } = useAuth()
   const [data, setData] = useState<Plans | null>(null)
+  const [buying, setBuying] = useState<{ plan: string; text: string } | null>(null)
   useEffect(() => { api.get<Plans>('/api/plans').then(setData).catch(() => {}) }, [])
   if (!data || !me) return <Spinner />
 
@@ -25,7 +26,9 @@ export default function Billing() {
   const buy = (key: PlanKey) => {
     if (!data.telegram) return toast(t('bill.no_tg'), 'error')
     const name = t(`plan.${key}` as TKey)
-    window.open(telegramLink(data.telegram, t('bill.tg_msg', { plan: name, email: me.user.email })), '_blank', 'noopener')
+    const text = t('bill.tg_msg', { plan: name, email: me.user.email })
+    setBuying({ plan: name, text })
+    window.location.href = telegramAppLink(data.telegram, text)
   }
 
   return (
@@ -83,6 +86,32 @@ export default function Billing() {
           )
         })}
       </div>
+
+      <Modal open={!!buying} onClose={() => setBuying(null)} title={`${t('bill.buy')} · ${buying?.plan ?? ''}`}>
+        {buying && (
+          <div className="space-y-4">
+            <p className="text-[14px] leading-relaxed text-ink-2">{t('bill.modal_hint')}</p>
+            <a href={telegramAppLink(data.telegram, buying.text)}
+              className="flex h-12 items-center justify-center gap-2 rounded-xl bg-[#229ED9] text-[15px] font-semibold text-white hover:bg-[#1b8cc2]">
+              <Send className="h-4 w-4" />{t('bill.open_app')}
+            </a>
+            <div className="rounded-xl bg-soft p-3.5">
+              <div className="text-[12px] text-ink-3">Telegram</div>
+              <div className="mt-0.5 text-[16px] font-bold">@{data.telegram}</div>
+              <div className="mt-3 text-[12px] text-ink-3">{t('bill.your_msg')}</div>
+              <div className="mt-1 whitespace-pre-wrap text-[13.5px]">{buying.text}</div>
+              <button onClick={() => { navigator.clipboard?.writeText(buying.text); toast(t('bill.copied')) }}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-3 py-1.5 text-[13px] font-semibold hover:bg-[#efeff3]">
+                <Copy className="h-3.5 w-3.5" />{t('bill.copy')}
+              </button>
+            </div>
+            <a href={telegramLink(data.telegram, buying.text)} target="_blank" rel="noopener"
+              className="flex items-center justify-center gap-1.5 text-[13px] font-medium text-ink-3 hover:text-ink">
+              <ExternalLink className="h-3.5 w-3.5" />{t('bill.web')}
+            </a>
+          </div>
+        )}
+      </Modal>
 
       <div className="card mt-8 p-6">
         <h3 className="flex items-center gap-2 text-[15px] font-bold"><MessageCircle className="h-4 w-4 text-brand-600" />{t('bill.how')}</h3>
