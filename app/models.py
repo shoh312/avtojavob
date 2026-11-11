@@ -63,6 +63,8 @@ class IGAccount(Base):
     tg_chat_title: Mapped[str] = mapped_column(String(255), default="")
     tg_notify_leads: Mapped[bool] = mapped_column(Boolean, default=True)
     tg_notify_inbox: Mapped[bool] = mapped_column(Boolean, default=False)
+    tg_notify_all: Mapped[bool] = mapped_column(Boolean, default=False)
+    tg_secret: Mapped[str] = mapped_column(String(64), default="")
     # CRM bosqichlari (bo'sh — standart bosqichlar egasining tilida)
     crm_stages_json: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -308,4 +310,18 @@ class Note(Base):
     kind: Mapped[str] = mapped_column(String(10), default="note")  # note | stage
     author: Mapped[str] = mapped_column(String(120), default="")
     text: Mapped[str] = mapped_column(Text, default="")
+    remind_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    reminded: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class TgLink(Base):
+    """Telegram'dagi xabar qaysi kontaktga tegishli — Reply orqali javob berish uchun."""
+
+    __tablename__ = "tg_links"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("ig_accounts.id", ondelete="CASCADE"), index=True)
+    tg_message_id: Mapped[int] = mapped_column(Integer, index=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -209,10 +209,21 @@ def _tg(token: str, method: str, **params) -> dict:
     return data["result"]
 
 
-def telegram_connect(token: str) -> tuple[str, str]:
-    """Botni tekshiradi va unga oxirgi yozgan chatni topadi -> (chat_id, title)."""
+def telegram_connect(token: str, webhook: str | None = None, secret: str | None = None) -> tuple[str, str]:
+    """Botni tekshiradi, unga oxirgi yozgan chatni topadi va webhook o'rnatadi -> (chat_id, title)."""
     _tg(token, "getMe")
+    try:
+        _tg(token, "deleteWebhook")  # getUpdates webhook bilan birga ishlamaydi
+    except TelegramError:
+        pass
     updates = _tg(token, "getUpdates", limit=50)
+    chat = _last_chat(updates)
+    if webhook and webhook.startswith("https://"):
+        _tg(token, "setWebhook", url=webhook, secret_token=secret, allowed_updates=["message", "callback_query"])
+    return chat
+
+
+def _last_chat(updates: list) -> tuple[str, str]:
     for upd in reversed(updates):
         msg = upd.get("message") or upd.get("channel_post") or upd.get("my_chat_member") or {}
         chat = msg.get("chat")
@@ -223,13 +234,23 @@ def telegram_connect(token: str) -> tuple[str, str]:
     raise TelegramError("no_chat")
 
 
-def telegram_send(token_enc: str, chat_id: str, text: str) -> None:
+def telegram_send(token_enc: str, chat_id: str, text: str, reply_markup: dict | None = None, **extra) -> int | None:
+    """Xabar yuboradi; Telegram'dagi message_id ni qaytaradi (xato bo'lsa — None)."""
     if not token_enc or not chat_id:
-        return
+        return None
+    params = {"chat_id": chat_id, "text": text[:4000], "disable_web_page_preview": True, **extra}
+    if reply_markup:
+        params["reply_markup"] = reply_markup
     try:
-        _tg(decrypt(token_enc), "sendMessage", chat_id=chat_id, text=text[:4000], disable_web_page_preview=True)
+        result = _tg(decrypt(token_enc), "sendMessage", **params)
+        return result.get("message_id") if isinstance(result, dict) else None
     except (TelegramError, ValueError) as e:
         log.warning("telegram: %s", e)
+        return None
+
+
+def telegram_call(token_enc: str, method: str, **params):
+    return _tg(decrypt(token_enc), method, **params)
 
 
 # ---------------------------------------------------------------- webhook

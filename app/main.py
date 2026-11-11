@@ -7,7 +7,7 @@ import secrets
 import threading
 from contextlib import asynccontextmanager
 from collections import Counter
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
@@ -24,11 +24,11 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import instagram as ig
-from . import crm, services
+from . import crm, services, tgbot
 from .config import settings
 from .db import get_db, init_db
 from .engine import (broadcast_audience, log_event, process_payload, record_message, refresh_expiring_tokens,
-                     resubscribe_all, run_broadcast, run_due_jobs)
+                     resubscribe_all, run_broadcast, run_due_jobs, run_due_reminders)
 from .flows import blank_graph, build_template, list_templates, trigger_of, validate_graph
 from .models import (LANGS, SEND_KINDS, Broadcast, Contact, EventLog, Flow, IGAccount, Message, NodeStat, Note,
                      PlanGrant, User, utcnow)
@@ -52,6 +52,7 @@ async def _background_loops():
     while True:
         try:
             await asyncio.to_thread(run_due_jobs)
+            await asyncio.to_thread(run_due_reminders)
             if tick % 720 == 0:  # ~6 soatda bir
                 await asyncio.to_thread(refresh_expiring_tokens)
         except Exception:
@@ -607,6 +608,31 @@ async def webhook_receive(request: Request, background: BackgroundTasks):
     return PlainTextResponse("EVENT_RECEIVED")
 
 
+# ---------------------------------------------------------------- Telegram bot webhook (egasining boti)
+
+@app.post("/tg/{account_id}")
+async def telegram_webhook(account_id: int, request: Request, background: BackgroundTasks):
+    from .db import SessionLocal
+    secret = request.headers.get("x-telegram-bot-api-secret-token") or ""
+    try:
+        update = await request.json()
+    except ValueError:
+        return PlainTextResponse("ok")
+
+    def handle():
+        with SessionLocal() as db:
+            acc = db.get(IGAccount, account_id)
+            if not acc or not acc.tg_secret or not secrets.compare_digest(secret, acc.tg_secret):
+                return
+            try:
+                tgbot.handle_update(db, acc, update)
+            except Exception:  # noqa: BLE001
+                log.exception("telegram update")
+
+    background.add_task(handle)
+    return PlainTextResponse("ok")
+
+
 # ---------------------------------------------------------------- Meta talab qiladigan sahifalar
 
 def _legal(request: Request, page: str, code: str = ""):
@@ -1015,8 +1041,10 @@ def google_callback(request: Request, code: str = "", state: str = "", db: Sessi
 
 def _integrations_json(db: Session, acc: IGAccount) -> dict:
     return {"ai_enabled": acc.ai_enabled, "ai_prompt": acc.ai_prompt, "ai_available": services.ai_available(db),
-            "telegram": {"connected": bool(acc.tg_chat_id), "chat": acc.tg_chat_title},
-            "tg_notify_leads": acc.tg_notify_leads, "tg_notify_inbox": acc.tg_notify_inbox}
+            "telegram": {"connected": bool(acc.tg_chat_id), "chat": acc.tg_chat_title,
+                         "two_way": settings.APP_URL.startswith("https://")},
+            "tg_notify_leads": acc.tg_notify_leads, "tg_notify_inbox": acc.tg_notify_inbox,
+            "tg_notify_all": acc.tg_notify_all}
 
 
 @app.get("/api/accounts/{account_id}/integrations")
@@ -1030,7 +1058,7 @@ def integrations_save(account_id: int, body: dict = Body(...), user: User = Depe
     acc = owned_account(db, user, account_id)
     if "ai_prompt" in body:
         acc.ai_prompt = str(body["ai_prompt"] or "")[:8000]
-    for key in ("ai_enabled", "tg_notify_leads", "tg_notify_inbox"):
+    for key in ("ai_enabled", "tg_notify_leads", "tg_notify_inbox", "tg_notify_all"):
         if key in body:
             setattr(acc, key, bool(body[key]))
     db.commit()
@@ -1044,22 +1072,28 @@ def telegram_connect(account_id: int, body: dict = Body(...), user: User = Depen
     token = str(body.get("bot_token") or "").strip()
     if not token or ":" not in token:
         err("tg_invalid")
+    acc.tg_secret = secrets.token_urlsafe(24)
     try:
-        chat_id, title = services.telegram_connect(token)
+        chat_id, title = services.telegram_connect(token, tgbot.webhook_url(acc), acc.tg_secret)
     except services.TelegramError as e:
         err("tg_no_chat" if str(e) == "no_chat" else "tg_invalid")
     acc.tg_bot_token_enc = encrypt(token)
     acc.tg_chat_id = chat_id
     acc.tg_chat_title = title[:255]
     db.commit()
-    services.telegram_send(acc.tg_bot_token_enc, chat_id, f"✅ ChatFlow: @{acc.username}")
+    services.telegram_send(acc.tg_bot_token_enc, chat_id, f"✅ ChatFlow: @{acc.username}\n\n{tgbot.t(acc, 'help')}")
     return _integrations_json(db, acc)
 
 
 @app.delete("/api/accounts/{account_id}/telegram")
 def telegram_disconnect(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
-    acc.tg_bot_token_enc, acc.tg_chat_id, acc.tg_chat_title = "", "", ""
+    if acc.tg_bot_token_enc:
+        try:
+            services.telegram_call(acc.tg_bot_token_enc, "deleteWebhook")
+        except (services.TelegramError, ValueError):
+            pass
+    acc.tg_bot_token_enc, acc.tg_chat_id, acc.tg_chat_title, acc.tg_secret = "", "", "", ""
     db.commit()
     return _integrations_json(db, acc)
 
@@ -1250,7 +1284,8 @@ def contact_timeline(contact_id: int, user: User = Depends(current_user), db: Se
     c = _owned_contact(db, user, contact_id)
     notes = db.scalars(select(Note).where(Note.contact_id == c.id).order_by(Note.id.desc()).limit(100)).all()
     msgs = db.scalars(select(Message).where(Message.contact_id == c.id).order_by(Message.id.desc()).limit(50)).all()
-    items = [{"type": n.kind, "id": f"n{n.id}", "text": n.text, "author": n.author, "created_at": iso(n.created_at)} for n in notes]
+    items = [{"type": n.kind, "id": f"n{n.id}", "text": n.text, "author": n.author, "created_at": iso(n.created_at),
+              "remind_at": iso(n.remind_at), "reminded": n.reminded} for n in notes]
     items += [{"type": "message", "id": f"m{m.id}", "text": m.text, "direction": m.direction, "source": m.source,
                "created_at": iso(m.created_at)} for m in msgs]
     items.sort(key=lambda x: x["created_at"] or "", reverse=True)
@@ -1263,7 +1298,16 @@ def contact_note(contact_id: int, body: dict = Body(...), user: User = Depends(c
     text = str(body.get("text") or "").strip()
     if not text:
         err("empty")
-    crm.add_note(db, c, text, user.name or user.email)
+    note = crm.add_note(db, c, text, user.name or user.email)
+    if body.get("remind_at"):
+        try:
+            when = datetime.fromisoformat(str(body["remind_at"]).replace("Z", "+00:00"))
+        except ValueError:
+            err("bad_date")
+        if when.tzinfo:
+            when = when.astimezone(timezone.utc).replace(tzinfo=None)
+        note.remind_at = when
+        db.commit()
     return contact_timeline(contact_id, user, db)
 
 
@@ -1351,7 +1395,7 @@ if (WEB_DIR / "assets").is_dir():
 
 @app.get("/{path:path}", include_in_schema=False)
 def spa(path: str):
-    if path.startswith(("api/", "webhook", "auth/google")):
+    if path.startswith(("api/", "webhook", "auth/google", "tg/")):
         return JSONResponse({"error": "not_found"}, status_code=404)
     static = (WEB_DIR / path).resolve()
     if path and static.is_file() and WEB_DIR.resolve() in static.parents:

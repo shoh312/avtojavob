@@ -428,11 +428,11 @@ def test_ai_assistant(client, monkeypatch):
 def test_telegram_notify_and_webhook(client, monkeypatch):
     from app import services
     sent = []
-    monkeypatch.setattr(services, "telegram_connect", lambda token: ("777", "Mening chatim"))
+    monkeypatch.setattr(services, "telegram_connect", lambda token, *a: ("777", "Mening chatim"))
     monkeypatch.setattr(services, "_tg", lambda token, method, **p: sent.append((method, p)) or {})
     assert client.post(f"/api/accounts/{S['acc']}/telegram", json={"bot_token": "bad"}, headers=H).json()["error"] == "tg_invalid"
     r = client.post(f"/api/accounts/{S['acc']}/telegram", json={"bot_token": "123:ABC"}, headers=H).json()
-    assert r["telegram"] == {"connected": True, "chat": "Mening chatim"} and sent[-1][0] == "sendMessage"
+    assert r["telegram"]["connected"] and r["telegram"]["chat"] == "Mening chatim" and sent[-1][0] == "sendMessage"
 
     # lid saqlanganda Telegram'ga kartochka
     flow = create(client, "lead")
@@ -601,3 +601,90 @@ def test_crm_pipeline(client):
     bad = client.put(f"/api/flows/{flow['id']}", json={"graph": {**g, "nodes": [*g["nodes"][:-1], {**act, "data": {"op": "set_stage"}}]}}, headers=H).json()
     assert any(e["code"] == "action_stage" for e in bad["errors"])
     assert "stage" in client.get(f"/api/contacts/export.csv?account_id={acc}").text.splitlines()[0]
+
+
+def test_telegram_two_way(client, monkeypatch):
+    from app import services
+    from app.engine import run_due_reminders
+    from app.models import IGAccount, Note, TgLink
+    _login(client, "a@b.tj", "newpass123")
+    acc = S["acc"]
+    sent, msg_id = [], [1000]
+
+    def fake_tg(token, method, **p):
+        sent.append((method, p))
+        if method == "sendMessage":
+            msg_id[0] += 1
+            return {"message_id": msg_id[0]}
+        return {}
+    monkeypatch.setattr(services, "_tg", fake_tg)
+    client.put(f"/api/accounts/{acc}/integrations", json={"tg_notify_all": True}, headers=H)
+    with SessionLocal() as db:
+        a = db.get(IGAccount, acc)
+        a.tg_secret = "s3cret"
+        db.commit()
+
+    # 1) mijoz yozadi -> Telegram'ga xabar (tugmalar bilan) + bog'lanish
+    for f in client.get(f"/api/flows?account_id={acc}").json()["items"]:
+        client.put(f"/api/flows/{f['id']}", json={"active": False}, headers=H)
+    sent.clear()
+    hook(client, text_msg(LONG_MID + "tgw1", "Salom, razmer bormi?"))
+    method, p = sent[-1]
+    assert method == "sendMessage" and "Salom, razmer bormi?" in p["text"] and p["chat_id"] == "777"
+    assert p["reply_markup"]["inline_keyboard"][-1][0]["callback_data"].startswith("p:")
+    tg_msg = msg_id[0]
+    with SessionLocal() as db:
+        link = db.query(TgLink).filter_by(tg_message_id=tg_msg).one()
+        cid = link.contact_id
+
+    def tg_update(update, secret="s3cret"):
+        return client.post(f"/tg/{acc}", json=update, headers={"X-Telegram-Bot-Api-Secret-Token": secret})
+
+    # 2) egasi Telegram'da Reply qiladi -> Instagram Direct'ga ketadi
+    calls.clear()
+    sent.clear()
+    tg_update({"message": {"message_id": 5, "chat": {"id": 777}, "text": "Ha, M va L bor",
+                           "reply_to_message": {"message_id": tg_msg}}})
+    assert calls == [("dm", "999", {"text": "Ha, M va L bor"})]
+    assert sent[-1][1]["text"] == "✅ Yuborildi"
+    thread = client.get(f"/api/inbox/{cid}").json()
+    assert thread["messages"][-1]["source"] == "agent" and thread["contact"]["bot_paused"]
+
+    # 3) begona chat va noto'g'ri secret — e'tiborsiz
+    calls.clear()
+    tg_update({"message": {"message_id": 6, "chat": {"id": 666}, "text": "x", "reply_to_message": {"message_id": tg_msg}}})
+    tg_update({"message": {"message_id": 7, "chat": {"id": 777}, "text": "x", "reply_to_message": {"message_id": tg_msg}}}, "bad")
+    assert calls == []
+
+    # 4) Reply'siz xabar — yordam matni
+    sent.clear()
+    tg_update({"message": {"message_id": 8, "chat": {"id": 777}, "text": "/start"}})
+    assert "Reply" in sent[-1][1]["text"]
+
+    # 5) tugma: botni yoqish/pauza
+    tg_update({"callback_query": {"id": "cb1", "data": f"r:{cid}", "message": {"message_id": tg_msg, "chat": {"id": 777}}}})
+    assert client.get(f"/api/inbox/{cid}").json()["contact"]["bot_paused"] is False
+    tg_update({"callback_query": {"id": "cb2", "data": f"p:{cid}", "message": {"message_id": tg_msg, "chat": {"id": 777}}}})
+    assert client.get(f"/api/inbox/{cid}").json()["contact"]["bot_paused"] is True
+    assert any(m == "answerCallbackQuery" for m, _ in sent)
+
+    # 6) 24 soat oynasi yopiq bo'lsa — yuborilmaydi
+    with SessionLocal() as db:
+        c = db.get(Contact, cid)
+        c.last_inbound_at = utcnow() - timedelta(hours=30)
+        db.commit()
+    calls.clear()
+    sent.clear()
+    tg_update({"message": {"message_id": 9, "chat": {"id": 777}, "text": "kech javob", "reply_to_message": {"message_id": tg_msg}}})
+    assert calls == [] and "24" in sent[-1][1]["text"]
+
+    # 7) CRM eslatmasi
+    when = (utcnow() - timedelta(minutes=1)).isoformat() + "Z"
+    tl = client.post(f"/api/contacts/{cid}/notes", json={"text": "Qo'ng'iroq qilish", "remind_at": when}, headers=H).json()
+    assert next(i for i in tl["items"] if i["type"] == "note")["remind_at"]
+    sent.clear()
+    assert run_due_reminders() == 1 and "Qo'ng'iroq qilish" in sent[-1][1]["text"]
+    assert run_due_reminders() == 0
+    with SessionLocal() as db:
+        assert db.query(Note).filter(Note.remind_at.is_not(None)).one().reminded
+    client.put(f"/api/accounts/{acc}/integrations", json={"tg_notify_all": False}, headers=H)

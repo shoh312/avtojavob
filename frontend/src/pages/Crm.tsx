@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type DragEvent, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowDown, ArrowUp, KanbanSquare, MessageCircle, Phone, Plus, Settings2, StickyNote, Trash2 } from 'lucide-react'
+import { AlarmClock, ArrowDown, ArrowUp, KanbanSquare, MessageCircle, Phone, Plus, Settings2, StickyNote, Trash2 } from 'lucide-react'
 import { api, ApiError, type Contact } from '../api'
 import { useAuth } from '../auth'
 import { useI18n, useTimeAgo, type TKey } from '../i18n'
@@ -11,7 +11,7 @@ import { Onboarding } from './Home'
 export type Stage = { id: string; name: string; color: string; type: 'open' | 'won' | 'lost' }
 type Card = Contact & { stage: string; deal_value: number; notes: number; last_message_preview: string }
 type Board = { stages: Stage[]; totals: Record<string, { count: number; sum: number }>; cards: Card[] }
-type TItem = { type: 'note' | 'stage' | 'message'; id: string; text: string; author?: string; direction?: string; source?: string; created_at: string }
+type TItem = { type: 'note' | 'stage' | 'message'; id: string; text: string; author?: string; direction?: string; source?: string; created_at: string; remind_at?: string | null; reminded?: boolean }
 
 export const STAGE_DOT: Record<string, string> = {
   sky: 'bg-sky-500', violet: 'bg-violet-500', amber: 'bg-amber-500', emerald: 'bg-emerald-500',
@@ -26,6 +26,7 @@ export function ContactPanel({ id, onClose, onChanged }: { id: number; onClose: 
   const [d, setD] = useState<{ contact: Card; stages: Stage[]; items: TItem[] } | null>(null)
   const [value, setValue] = useState('')
   const [note, setNote] = useState('')
+  const [remind, setRemind] = useState('')
   const [tag, setTag] = useState('')
   const load = useCallback(() => api.get<{ contact: Card; stages: Stage[]; items: TItem[] }>(`/api/contacts/${id}/timeline`)
     .then(r => { setD(r); setValue(String(r.contact.deal_value || '')) }), [id])
@@ -37,8 +38,9 @@ export function ContactPanel({ id, onClose, onChanged }: { id: number; onClose: 
   const addNote = async (e: FormEvent) => {
     e.preventDefault()
     if (!note.trim()) return
-    setD(await api.post(`/api/contacts/${id}/notes`, { text: note }))
+    setD(await api.post(`/api/contacts/${id}/notes`, { text: note, remind_at: remind ? new Date(remind).toISOString() : null }))
     setNote('')
+    setRemind('')
     onChanged?.()
   }
   const c = d?.contact
@@ -74,9 +76,15 @@ export function ContactPanel({ id, onClose, onChanged }: { id: number; onClose: 
             </Link>
           </div>
           <div className="flex min-h-0 flex-col">
-            <form onSubmit={addNote} className="flex gap-2">
-              <input className="input flex-1" value={note} placeholder={t('crm.note_ph')} onChange={e => setNote(e.target.value)} />
-              <Button type="submit" disabled={!note.trim()}><StickyNote className="h-4 w-4" />{t('crm.add_note')}</Button>
+            <form onSubmit={addNote} className="space-y-2">
+              <div className="flex gap-2">
+                <input className="input flex-1" value={note} placeholder={t('crm.note_ph')} onChange={e => setNote(e.target.value)} />
+                <Button type="submit" disabled={!note.trim()}><StickyNote className="h-4 w-4" />{t('crm.add_note')}</Button>
+              </div>
+              <label className="flex items-center gap-2 text-[12.5px] text-ink-3">
+                <AlarmClock className="h-3.5 w-3.5" />{t('crm.remind')}
+                <input type="datetime-local" className="input h-8 w-auto py-1 text-[12.5px]" value={remind} onChange={e => setRemind(e.target.value)} />
+              </label>
             </form>
             <div className="scrollbar-thin mt-4 max-h-[52vh] space-y-2.5 overflow-y-auto pr-1">
               {d.items.map(it => (
@@ -87,6 +95,11 @@ export function ContactPanel({ id, onClose, onChanged }: { id: number; onClose: 
                     <span className="ml-auto">{ago(it.created_at)}</span>
                   </div>
                   <div className="whitespace-pre-wrap break-words">{it.text}</div>
+                  {it.remind_at && (
+                    <div className={`mt-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] font-semibold ${it.reminded ? 'bg-white text-ink-4 line-through' : 'bg-white text-amber-700'}`}>
+                      <AlarmClock className="h-3 w-3" />{new Date(it.remind_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

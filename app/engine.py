@@ -23,7 +23,7 @@ from .db import SessionLocal
 from .flows import field_key, trigger_of
 from .models import (SEND_KINDS, Broadcast, Contact, EventLog, Flow, FlowSession, IGAccount, Message, NodeStat,
                      ProcessedEvent, ScheduledJob, utcnow)
-from . import crm, services
+from . import crm, services, tgbot
 from .plans import account_owner_active
 from .security import decrypt, encrypt
 
@@ -140,12 +140,11 @@ def contact_card(contact: Contact, title: str, extra: str = "") -> str:
         lines.append("🏷 " + ", ".join(contact.tags))
     if extra:
         lines += ["", extra]
-    lines += ["", f"{settings.APP_URL}/app/inbox?c={contact.id}"]
     return "\n".join(lines)
 
 
-def notify_telegram(account: IGAccount, text: str) -> None:
-    services.telegram_send(account.tg_bot_token_enc, account.tg_chat_id, text)
+def notify_telegram(db: Session, account: IGAccount, text: str, contact: Contact | None = None) -> None:
+    tgbot.notify(db, account, text, contact)
 
 
 def fill(template: str, contact: Contact) -> str:
@@ -275,7 +274,7 @@ def apply_action(ctx: Ctx, d: dict) -> None:
         c.fields = fields
     elif op == "notify":
         if ctx.account.tg_chat_id:
-            notify_telegram(ctx.account, contact_card(c, f"🔔 {fill(d.get('text', ''), c) or ctx.flow.name}"))
+            notify_telegram(ctx.db, ctx.account, contact_card(c, f"🔔 {fill(d.get('text', ''), c) or ctx.flow.name}"), c)
         else:
             ctx.log("error", "notify → telegram_not_connected")
     elif op == "set_stage":
@@ -452,7 +451,7 @@ def handle_answer(db: Session, account: IGAccount, contact: Contact, session: Fl
     if key in ("phone", "email") and not contact.stage:
         crm.set_stage(db, contact, crm.get_stages(account)[0]["id"], f"⚡ {flow.name}")
     if account.tg_notify_leads and account.tg_chat_id:
-        notify_telegram(account, contact_card(contact, f"🎯 {flow.name}"))
+        notify_telegram(db, account, contact_card(contact, f"🎯 {flow.name}"), contact)
     run_from(ctx, ctx.graph.next(node["id"]))
 
 
@@ -525,6 +524,10 @@ def handle_messaging(db: Session, account: IGAccount, event: dict) -> None:
     else:
         record_message(db, account.id, contact, "in", text or "[media]", "user")
 
+    if account.tg_notify_all and account.tg_chat_id and not postback and not qr:
+        who = f"@{contact.username}" if contact.username else (contact.name or contact.igsid)
+        notify_telegram(db, account, f"{tgbot.t(account, 'new_msg')} · {who}\n\n{text or '[media]'}", contact)
+
     if contact.bot_paused():
         return  # operator suhbatni o'z qo'liga olgan
 
@@ -560,8 +563,8 @@ def handle_messaging(db: Session, account: IGAccount, event: dict) -> None:
         # Hech bir ssenariy mos kelmadi: AI yordamchi yoki operatorga xabarnoma
         if kind == "dm" and text and mark_processed(db, f"m:{mid}"):
             if not (account.ai_enabled and ai_answer(db, account, contact, text)):
-                if account.tg_notify_inbox and account.tg_chat_id:
-                    notify_telegram(account, contact_card(contact, "💬 Direct", f"“{text[:500]}”"))
+                if account.tg_notify_inbox and account.tg_chat_id and not account.tg_notify_all:
+                    notify_telegram(db, account, contact_card(contact, "💬 Direct", f"“{text[:500]}”"), contact)
         return
     if not mark_processed(db, f"m:{mid}"):
         return
@@ -728,5 +731,24 @@ def refresh_expiring_tokens() -> None:
         db.query(ProcessedEvent).filter(ProcessedEvent.created_at < utcnow() - timedelta(days=14)).delete()
         db.query(FlowSession).filter(FlowSession.expires_at < utcnow()).delete()
         db.commit()
+    finally:
+        db.close()
+
+
+def run_due_reminders() -> int:
+    """CRM eslatmalari: vaqti kelgan izohlarni Telegram'ga yuborish."""
+    from .models import Note
+    db = SessionLocal()
+    sent = 0
+    try:
+        notes = db.scalars(select(Note).where(Note.remind_at <= utcnow(), Note.reminded.is_(False)).limit(100)).all()
+        for n in notes:
+            n.reminded = True
+            db.commit()
+            contact = db.get(Contact, n.contact_id)
+            if contact and contact.account.tg_chat_id:
+                notify_telegram(db, contact.account, contact_card(contact, f"{tgbot.t(contact.account, 'reminder')}: {n.text}"), contact)
+                sent += 1
+        return sent
     finally:
         db.close()

@@ -8,7 +8,7 @@ import { Onboarding } from './Home'
 
 type Integ = {
   ai_enabled: boolean; ai_prompt: string; ai_available: boolean
-  telegram: { connected: boolean; chat: string }; tg_notify_leads: boolean; tg_notify_inbox: boolean
+  telegram: { connected: boolean; chat: string; two_way: boolean }; tg_notify_leads: boolean; tg_notify_inbox: boolean; tg_notify_all: boolean
 }
 
 export default function Integrations() {
@@ -91,7 +91,12 @@ export default function Integrations() {
                 <span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4" />{t('int.tg.connected', { chat: d.telegram.chat })}</span>
                 <button onClick={() => run('tgdel', async () => setD(await api.del<Integ>(`${base}/telegram`)))} className="text-[13px] font-semibold text-emerald-900 underline">{t('int.tg.disconnect')}</button>
               </div>
-              {([['tg_notify_leads', 'int.tg.leads'], ['tg_notify_inbox', 'int.tg.inbox']] as const).map(([key, label]) => (
+              <div className="flex gap-2.5 rounded-xl bg-[#e8f4fb] px-3.5 py-3 text-[13px] leading-snug text-[#11577a]">
+                <Send className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{d.telegram.two_way ? t('int.tg.reply_info') : t('int.tg.reply_https')}</span>
+              </div>
+              {([['tg_notify_all', 'int.tg.all'], ['tg_notify_leads', 'int.tg.leads'], ['tg_notify_inbox', 'int.tg.inbox']] as const)
+                .filter(([key]) => !(key === 'tg_notify_inbox' && d.tg_notify_all)).map(([key, label]) => (
                 <label key={key} className="flex items-center justify-between gap-3 text-[14px]">
                   {t(label)}<Toggle checked={d[key]} onChange={v => save({ [key]: v })} />
                 </label>
