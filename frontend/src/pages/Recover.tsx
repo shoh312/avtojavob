@@ -28,7 +28,15 @@ export function Forgot() {
   const [email, setEmail] = useState('')
   const [state, setState] = useState<'idle' | 'busy' | 'sent' | 'no_email'>('idle')
   const [tg, setTg] = useState('')
-  useEffect(() => { api.get<{ telegram: string }>('/api/auth/config').then(r => setTg(r.telegram)).catch(() => {}) }, [])
+  const [google, setGoogle] = useState(false)
+  useEffect(() => {
+    api.get<{ telegram: string; google: boolean }>('/api/auth/config').then(r => { setTg(r.telegram); setGoogle(r.google) }).catch(() => {})
+  }, [])
+  const googleBtn = google && (
+    <a href="/auth/google" className="flex h-11 w-full items-center justify-center gap-2.5 rounded-xl border border-line bg-white text-[14.5px] font-semibold hover:bg-soft">
+      <span className="text-[17px] font-bold text-[#4285F4]">G</span>{t('auth.google')}
+    </a>
+  )
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setState('busy')
@@ -44,6 +52,7 @@ export function Forgot() {
       ) : state === 'no_email' ? (
         <div className="space-y-4">
           <div className="rounded-2xl bg-amber-50 p-4 text-[14px] text-amber-900">{t('auth.forgot.no_email')}</div>
+          {googleBtn}
           {tg && <a href={telegramAppLink(tg, `ChatFlow: ${email}`)} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-[#229ED9] text-[14px] font-semibold text-white"><Send className="h-4 w-4" />@{tg}</a>}
         </div>
       ) : (
@@ -51,6 +60,8 @@ export function Forgot() {
           <label className="block"><span className="label">{t('auth.email')}</span>
             <input type="email" required className="input h-11" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" /></label>
           <Button type="submit" size="lg" className="w-full" loading={state === 'busy'}>{t('auth.forgot.btn')}</Button>
+          {google && <div className="flex items-center gap-3 pt-2 text-[12px] uppercase tracking-wider text-ink-4"><span className="h-px flex-1 bg-line" />{t('auth.or')}<span className="h-px flex-1 bg-line" /></div>}
+          {googleBtn}
         </form>
       )}
     </Shell>
