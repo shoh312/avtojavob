@@ -1,38 +1,133 @@
-{% extends "base.html" %}
-{% block content %}
-<article class="max-w-3xl mx-auto bg-white border border-slate-200 rounded-2xl p-8 leading-relaxed space-y-4 text-slate-700">
-{% if page == 'privacy' %}
-  <h1 class="text-2xl font-bold text-slate-900">Maxfiylik siyosati</h1>
-  <p>{{ settings.APP_NAME }} ({{ settings.APP_URL }}) Instagram professional akkauntlari uchun avtomatik javob xizmatidir.</p>
-  <h2 class="font-semibold text-slate-900">Qanday ma'lumot yig'amiz</h2>
-  <ul class="list-disc list-inside">
-    <li>Ro'yxatdan o'tishda: email va ism.</li>
-    <li>Instagram ulanganda: akkaunt ID, username, ism, profil rasmi va access token (shifrlangan holda saqlanadi).</li>
-    <li>Ulangan akkauntga kelgan izoh va Direct xabarlar matni — faqat siz belgilagan qoidalarni tekshirish va javob yuborish uchun. Tarix sahifasi uchun qisqa jurnal saqlanadi.</li>
-  </ul>
-  <h2 class="font-semibold text-slate-900">Ma'lumotdan foydalanish</h2>
-  <p>Ma'lumotlar faqat xizmatni ko'rsatish uchun ishlatiladi, uchinchi shaxslarga sotilmaydi va berilmaydi.</p>
-  <h2 class="font-semibold text-slate-900">O'chirish</h2>
-  <p>Akkauntni paneldagi “Uzish” tugmasi bilan istalgan vaqtda uzishingiz mumkin — bunda token va qoidalar o'chiriladi. Batafsil: <a class="text-pink-600" href="/data-deletion">Ma'lumotlarni o'chirish</a>.</p>
-{% elif page == 'terms' %}
-  <h1 class="text-2xl font-bold text-slate-900">Foydalanish shartlari</h1>
-  <p>{{ settings.APP_NAME }} xizmatidan foydalanib, siz Instagram va Meta platformasi qoidalariga rioya qilishga rozilik bildirasiz.</p>
-  <ul class="list-disc list-inside">
-    <li>Xizmatdan spam, aldov yoki qonunga zid kontent tarqatish uchun foydalanish taqiqlanadi.</li>
-    <li>Avtomatik javoblar mazmuni uchun akkaunt egasi javobgar.</li>
-    <li>Meta API cheklovlari sababli ayrim xabarlar yetkazilmasligi mumkin.</li>
-    <li>Qoidalar buzilsa, hisob ogohlantirishsiz to'xtatilishi mumkin.</li>
-  </ul>
-{% else %}
-  <h1 class="text-2xl font-bold text-slate-900">Ma'lumotlarni o'chirish</h1>
-  {% if code %}
-    <p class="rounded-xl bg-emerald-50 text-emerald-700 px-4 py-3">So'rovingiz qabul qilindi va ma'lumotlar o'chirildi. Tasdiqlash kodi: <b>{{ code }}</b></p>
-  {% endif %}
-  <p>Ma'lumotlaringizni o'chirish uchun quyidagi usullardan birini tanlang:</p>
-  <ol class="list-decimal list-inside">
-    <li>Panelga kiring va akkaunt yonidagi “Uzish” tugmasini bosing — Instagram tokeni, qoidalar va tarix darhol o'chadi.</li>
-    <li>Instagram → Sozlamalar → Veb-saytlar uchun ruxsatlar → {{ settings.APP_NAME }} ilovasini olib tashlang. Biz avtomatik so'rov olamiz va ma'lumotlarni o'chiramiz.</li>
-  </ol>
-{% endif %}
+{%- set T = {
+  'privacy': {'tj': 'Сиёсати махфият', 'ru': 'Политика конфиденциальности', 'uz': 'Maxfiylik siyosati', 'en': 'Privacy Policy'},
+  'terms': {'tj': 'Шартҳои истифода', 'ru': 'Условия использования', 'uz': 'Foydalanish shartlari', 'en': 'Terms of Service'},
+  'deletion': {'tj': 'Нест кардани маълумот', 'ru': 'Удаление данных', 'uz': "Ma'lumotlarni o'chirish", 'en': 'Data Deletion'},
+} -%}
+{%- set B = {
+ 'tj': {
+  'privacy': [
+    ['', 'ChatFlow (' ~ settings.APP_URL ~ ') — хизмати автоматикунонии паёмҳо барои аккаунтҳои касбии Instagram.'],
+    ['Кадом маълумотро ҷамъ мекунем', 'Ҳангоми бақайдгирӣ: почтаи электронӣ ва ном. Ҳангоми пайваст кардани Instagram: ID-и аккаунт, номи корбар, ном, акси профил ва токени дастрасӣ (рамзгузоришуда). Шарҳҳо ва паёмҳое, ки ба аккаунти пайвастшуда меоянд — танҳо барои иҷрои сенарияҳои шумо. Маълумоти контактҳо (номи корбар, барчаспҳо, майдонҳое, ки худи онҳо фиристодаанд).'],
+    ['Истифодаи маълумот', 'Маълумот танҳо барои пешниҳоди хизмат истифода мешавад ва ба шахсони сеюм фурӯхта ё дода намешавад.'],
+    ['Нест кардан', 'Шумо метавонед ҳар вақт аккаунтро дар панел ҷудо кунед — токен, сенарияҳо ва контактҳо нест мешаванд.'],
+  ],
+  'terms': [
+    ['', 'Бо истифодаи ChatFlow шумо ба риояи қоидаҳои Instagram ва Meta розӣ мешавед.'],
+    ['Қоидаҳо', 'Истифодаи хизмат барои спам, фиреб ё мундариҷаи ғайриқонунӣ манъ аст. Барои мазмуни паёмҳои худкор соҳиби аккаунт ҷавобгар аст. Бо сабаби маҳдудиятҳои Meta баъзе паёмҳо метавонанд нарасанд. Ҳангоми вайрон кардани қоидаҳо аккаунт бе огоҳӣ қатъ карда мешавад.'],
+  ],
+  'deletion': [
+    ['', 'Барои нест кардани маълумоти худ яке аз роҳҳоро интихоб кунед:'],
+    ['1', 'Ба панел ворид шавед ва дар бахши «Аккаунтҳо» аккаунтро ҷудо кунед — токен, сенарияҳо ва контактҳо дарҳол нест мешаванд.'],
+    ['2', 'Instagram → Танзимот → Иҷозатҳо барои вебсайтҳо → ChatFlow-ро хориҷ кунед. Мо дархости худкор мегирем ва маълумотро нест мекунем.'],
+  ],
+  'ok': 'Дархост қабул шуд ва маълумот нест карда шуд. Рамзи тасдиқ:',
+  'back': 'Ба саҳифаи асосӣ',
+ },
+ 'ru': {
+  'privacy': [
+    ['', 'ChatFlow (' ~ settings.APP_URL ~ ') — сервис автоматизации сообщений для профессиональных аккаунтов Instagram.'],
+    ['Какие данные мы собираем', 'При регистрации: email и имя. При подключении Instagram: ID аккаунта, имя пользователя, имя, фото профиля и токен доступа (хранится в зашифрованном виде). Комментарии и сообщения, приходящие на подключённый аккаунт, — только для выполнения ваших сценариев. Данные контактов (имя пользователя, теги, поля, которые они сами отправили).'],
+    ['Использование данных', 'Данные используются только для работы сервиса и не продаются и не передаются третьим лицам.'],
+    ['Удаление', 'Вы можете в любой момент отключить аккаунт в панели — токен, сценарии и контакты будут удалены.'],
+  ],
+  'terms': [
+    ['', 'Используя ChatFlow, вы соглашаетесь соблюдать правила Instagram и платформы Meta.'],
+    ['Правила', 'Запрещено использовать сервис для спама, мошенничества или незаконного контента. За содержание автоматических сообщений отвечает владелец аккаунта. Из-за ограничений Meta некоторые сообщения могут быть не доставлены. При нарушении правил аккаунт может быть заблокирован без предупреждения.'],
+  ],
+  'deletion': [
+    ['', 'Чтобы удалить свои данные, выберите один из способов:'],
+    ['1', 'Войдите в панель и отключите аккаунт в разделе «Аккаунты» — токен, сценарии и контакты удалятся сразу.'],
+    ['2', 'Instagram → Настройки → Разрешения для сайтов → удалите ChatFlow. Мы получим автоматический запрос и удалим данные.'],
+  ],
+  'ok': 'Запрос принят, данные удалены. Код подтверждения:',
+  'back': 'На главную',
+ },
+ 'uz': {
+  'privacy': [
+    ['', 'ChatFlow (' ~ settings.APP_URL ~ ") — Instagram professional akkauntlari uchun xabarlarni avtomatlashtirish xizmati."],
+    ["Qanday ma'lumot yig'amiz", "Ro'yxatdan o'tishda: email va ism. Instagram ulanganda: akkaunt ID, username, ism, profil rasmi va access token (shifrlangan holda). Ulangan akkauntga kelgan izoh va xabarlar — faqat sizning ssenariylaringizni bajarish uchun. Kontaktlar ma'lumoti (username, teglar, ular o'zi yuborgan maydonlar)."],
+    ["Ma'lumotdan foydalanish", "Ma'lumotlar faqat xizmatni ko'rsatish uchun ishlatiladi, uchinchi shaxslarga sotilmaydi va berilmaydi."],
+    ["O'chirish", "Akkauntni panelda istalgan vaqtda uzishingiz mumkin — token, ssenariylar va kontaktlar o'chiriladi."],
+  ],
+  'terms': [
+    ['', "ChatFlow'dan foydalanib, siz Instagram va Meta qoidalariga rioya qilishga rozilik bildirasiz."],
+    ['Qoidalar', "Xizmatdan spam, aldov yoki qonunga zid kontent uchun foydalanish taqiqlanadi. Avtomatik xabarlar mazmuni uchun akkaunt egasi javobgar. Meta cheklovlari sababli ayrim xabarlar yetkazilmasligi mumkin. Qoidalar buzilsa, hisob ogohlantirishsiz to'xtatilishi mumkin."],
+  ],
+  'deletion': [
+    ['', "Ma'lumotlaringizni o'chirish uchun usullardan birini tanlang:"],
+    ['1', "Panelga kiring va «Akkauntlar» bo'limida akkauntni uzing — token, ssenariylar va kontaktlar darhol o'chadi."],
+    ['2', "Instagram → Sozlamalar → Veb-saytlar uchun ruxsatlar → ChatFlow'ni olib tashlang. Biz avtomatik so'rov olamiz va ma'lumotlarni o'chiramiz."],
+  ],
+  'ok': "So'rov qabul qilindi va ma'lumotlar o'chirildi. Tasdiqlash kodi:",
+  'back': 'Bosh sahifa',
+ },
+ 'en': {
+  'privacy': [
+    ['', 'ChatFlow (' ~ settings.APP_URL ~ ') is a messaging automation service for Instagram professional accounts.'],
+    ['What we collect', 'On sign-up: email and name. When you connect Instagram: account ID, username, name, profile picture and access token (stored encrypted). Comments and messages received by the connected account — only to run your automations. Contact data (username, tags and fields that contacts sent themselves).'],
+    ['How we use data', 'Data is used only to provide the service and is never sold or shared with third parties.'],
+    ['Deletion', 'You can disconnect your account in the dashboard at any time — the token, flows and contacts are deleted.'],
+  ],
+  'terms': [
+    ['', 'By using ChatFlow you agree to comply with Instagram and Meta Platform policies.'],
+    ['Rules', 'Using the service for spam, fraud or illegal content is prohibited. The account owner is responsible for the content of automated messages. Due to Meta limits some messages may not be delivered. Accounts violating these rules may be suspended without notice.'],
+  ],
+  'deletion': [
+    ['', 'To delete your data, choose one of the options:'],
+    ['1', 'Log in and disconnect the account under “Accounts” — the token, flows and contacts are deleted immediately.'],
+    ['2', 'Instagram → Settings → Website permissions → remove ChatFlow. We receive an automatic request and delete your data.'],
+  ],
+  'ok': 'Your request was received and the data was deleted. Confirmation code:',
+  'back': 'Home',
+ },
+} -%}
+{%- set L = B[lang] -%}
+<!doctype html>
+<html lang="{{ 'tg' if lang == 'tj' else lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ T[page][lang] }} — ChatFlow</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <style>
+    :root { --red: #e5161f; --ink: #111114; --muted: #6b6b76; --line: #ececf0; --bg: #ffffff; --soft: #fafafb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: var(--ink); background: var(--soft); line-height: 1.65; }
+    header { background: var(--bg); border-bottom: 1px solid var(--line); }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 0 16px; }
+    .bar { height: 64px; display: flex; align-items: center; justify-content: space-between; }
+    .logo { display: flex; align-items: center; gap: 8px; font-weight: 800; font-style: italic; font-size: 20px; text-decoration: none; color: var(--ink); }
+    .logo b { color: var(--red); }
+    .langs a { color: var(--muted); text-decoration: none; font-size: 13px; margin-left: 10px; text-transform: uppercase; }
+    .langs a.on { color: var(--red); font-weight: 700; }
+    article { background: var(--bg); border: 1px solid var(--line); border-radius: 20px; padding: 32px; margin: 32px auto; }
+    h1 { font-size: 28px; margin: 0 0 16px; letter-spacing: -0.02em; }
+    h2 { font-size: 17px; margin: 24px 0 6px; }
+    p { margin: 0 0 12px; color: #33333b; }
+    .num { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--red); color: #fff; font-size: 13px; font-weight: 700; margin-right: 8px; }
+    .ok { background: #ecfdf3; color: #067647; border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; }
+    footer { text-align: center; color: var(--muted); font-size: 13px; padding: 0 16px 32px; }
+    footer a { color: var(--muted); margin: 0 8px; }
+  </style>
+</head>
+<body>
+<header><div class="wrap bar">
+  <a class="logo" href="/"><img src="/favicon.svg" width="28" height="28" alt="">Chat<b>Flow</b></a>
+  <nav class="langs">{% for l in ['tj','ru','uz','en'] %}<a href="?lang={{ l }}" class="{{ 'on' if l == lang }}">{{ l }}</a>{% endfor %}</nav>
+</div></header>
+<div class="wrap">
+<article>
+  <h1>{{ T[page][lang] }}</h1>
+  {% if page == 'deletion' and code %}<p class="ok">{{ L.ok }} <b>{{ code }}</b></p>{% endif %}
+  {% for title, text in L[page] %}
+    {% if title in ['1', '2'] %}<p><span class="num">{{ title }}</span>{{ text }}</p>
+    {% elif title %}<h2>{{ title }}</h2><p>{{ text }}</p>
+    {% else %}<p>{{ text }}</p>{% endif %}
+  {% endfor %}
 </article>
-{% endblock %}
+</div>
+<footer>
+  <a href="/privacy?lang={{ lang }}">{{ T.privacy[lang] }}</a>·<a href="/terms?lang={{ lang }}">{{ T.terms[lang] }}</a>·<a href="/data-deletion?lang={{ lang }}">{{ T.deletion[lang] }}</a>
+</footer>
+</body>
+</html>

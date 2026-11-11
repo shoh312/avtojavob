@@ -1,17 +1,24 @@
-# AvtoJavob — Instagram izoh va Direct avtojavob xizmati
+# ChatFlow — Instagram avtomatlashtirish (SaaS)
 
-Kalit so'z bo'yicha:
-- postga yozilgan **izohga ochiq javob** beradi,
-- izoh egasiga **Direct'da shaxsiy xabar** (Private Reply) yuboradi,
-- **Direct'ga kelgan xabarga** avtomatik javob qaytaradi,
-- xabarga **havola tugmalari** (3 tagacha) qo'shadi,
-- **obuna tekshiruvi**: havolani faqat sahifaga obuna bo'lganlarga beradi.
+Instagram izohlar, Direct va story'lar uchun vizual ssenariy quruvchi.
 
-Ko'p foydalanuvchili (SaaS): har kim ro'yxatdan o'tib, o'z Instagram akkauntini ulaydi.
+- **2D ssenariy quruvchi** (React Flow): Trigger → Xabar (tugmalar) → Savol → Shart → Amal → Kutish
+- Triggerlar: izoh, Direct, story'ga javob, story'da belgilash
+- Obuna tekshiruvi, lid yig'ish (telefon/email), teglar, kontaktlar bazasi + CSV
+- Har bir blokda statistika, tayyor shablonlar
+- 4 til: tojikcha, ruscha, o'zbekcha, inglizcha
 
-Texnologiya: Python 3.11+, FastAPI, SQLAlchemy (SQLite / PostgreSQL), Jinja2 + Tailwind.
+Texnologiya: Python (FastAPI, SQLAlchemy, PostgreSQL) + React (Vite, Tailwind, React Flow).
+Frontend build `app/web` papkasida (repoda) — serverda Node.js kerak emas.
 
----
+### Frontend'ni o'zgartirish
+
+```bash
+cd frontend
+npm install
+npm run dev      # http://localhost:5173 (backend 8000-portda ishlashi kerak)
+npm run build    # app/web ga yig'adi — keyin commit qiling
+```
 
 ## 1. Lokal ishga tushirish
 

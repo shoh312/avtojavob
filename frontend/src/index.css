@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  body { @apply bg-white text-ink font-sans; font-feature-settings: 'cv11', 'ss01'; }
+  ::selection { @apply bg-brand-100 text-brand-900; }
+}
+
+@layer components {
+  .input {
+    @apply w-full rounded-xl border border-line bg-white px-3.5 py-2.5 text-[14px] text-ink placeholder:text-ink-4
+           outline-none transition focus:border-brand-400 focus:ring-4 focus:ring-brand-100;
+  }
+  .label { @apply mb-1.5 block text-[13px] font-medium text-ink-2; }
+  .hint { @apply mt-1.5 text-[12px] leading-snug text-ink-3; }
+  .card { @apply rounded-2xl border border-line bg-white shadow-card; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full bg-soft px-2.5 py-1 text-[12px] font-medium text-ink-2; }
+  .wordmark { @apply font-extrabold italic tracking-[-0.03em]; }
+}
+
+/* React Flow — minimal mavzu */
+.react-flow__attribution { display: none; }
+.react-flow__handle {
+  width: 12px; height: 12px; border: 2px solid #fff; background: #c4c4cc;
+  box-shadow: 0 0 0 1px #d9d9e0; transition: transform .12s, background .12s;
+}
+.react-flow__handle:hover { transform: scale(1.35); background: #e5161f; }
+.react-flow__handle.connectingfrom, .react-flow__handle.valid { background: #e5161f; }
+.react-flow__edge-path { stroke: #b9b9c3; stroke-width: 2; }
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path { stroke: #e5161f; }
+.react-flow__connection-path { stroke: #e5161f; stroke-width: 2; stroke-dasharray: 6 4; }
+.react-flow__node { cursor: grab; }
+.react-flow__node.dragging { cursor: grabbing; }
+.react-flow__pane { cursor: default; }
+
+.scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #e2e2e8; border-radius: 8px; }
+
+@keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.animate-fade-up { animation: fade-up .35s ease-out both; }
+@keyframes float { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-6px) } }
+.animate-float { animation: float 5s ease-in-out infinite; }
+@keyframes dash { to { stroke-dashoffset: -20; } }
+.animate-dash { animation: dash 1.2s linear infinite; }

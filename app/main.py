@@ -1,200 +1,218 @@
 import asyncio
+import csv
+import io
 import json
 import logging
 import secrets
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, Form, HTTPException, Request
+from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, RedirectResponse,
+                               StreamingResponse)
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import instagram as ig
 from .config import settings
 from .db import get_db, init_db
-from .engine import process_payload, refresh_expiring_tokens, resubscribe_all
-from .models import (DEFAULT_FOLLOW_BUTTON, DEFAULT_GATE_BUTTON, DEFAULT_NOT_FOLLOWING, MATCH_MODES, SEND_KINDS,
-                     TRIGGERS, EventLog, IGAccount, Rule, User, utcnow)
-from .security import (decrypt, encrypt, hash_password, parse_signed_request,
-                       verify_password, verify_webhook_signature)
+from .engine import process_payload, refresh_expiring_tokens, resubscribe_all, run_due_jobs
+from .flows import blank_graph, build_template, list_templates, trigger_of, validate_graph
+from .models import (LANGS, SEND_KINDS, Contact, EventLog, Flow, IGAccount, NodeStat, User, utcnow)
+from .security import (decrypt, encrypt, hash_password, parse_signed_request, verify_password,
+                       verify_webhook_signature)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("app")
 
+WEB_DIR = Path(__file__).parent / "web"
 
-async def _refresh_loop():
+
+async def _background_loops():
     try:
         await asyncio.to_thread(resubscribe_all)
     except Exception:
         log.exception("resubscribe")
+    tick = 0
     while True:
         try:
-            await asyncio.to_thread(refresh_expiring_tokens)
+            await asyncio.to_thread(run_due_jobs)
+            if tick % 720 == 0:  # ~6 soatda bir
+                await asyncio.to_thread(refresh_expiring_tokens)
         except Exception:
-            log.exception("token refresh loop")
-        await asyncio.sleep(6 * 3600)
+            log.exception("background loop")
+        tick += 1
+        await asyncio.sleep(30)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    task = asyncio.create_task(_refresh_loop())
+    task = asyncio.create_task(_background_loops())
     yield
     task.cancel()
 
 
-app = FastAPI(title=settings.APP_NAME, lifespan=lifespan, docs_url=None, redoc_url=None)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=settings.SECRET_KEY,
-    same_site="lax",
-    https_only=settings.APP_URL.startswith("https"),
-    max_age=30 * 86400,
-)
+app = FastAPI(title=settings.APP_NAME, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY, same_site="lax",
+                   https_only=settings.APP_URL.startswith("https"), max_age=30 * 86400)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
-# ---------- Yordamchilar ----------
-
-class LoginRequired(Exception):
-    pass
-
-
-class NotFound(Exception):
-    pass
-
-
-@app.exception_handler(LoginRequired)
-async def _login_required(request: Request, exc: LoginRequired):
-    return RedirectResponse("/login", status_code=303)
+@app.middleware("http")
+async def csrf_guard(request: Request, call_next):
+    # API'ga o'zgartiruvchi so'rovlar faqat bizning frontenddan (maxsus sarlavha bilan) keladi
+    if request.url.path.startswith("/api/") and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        if request.headers.get("x-chatflow") != "1":
+            return JSONResponse({"error": "csrf"}, status_code=403)
+    return await call_next(request)
 
 
-@app.exception_handler(NotFound)
-async def _not_found(request: Request, exc: NotFound):
-    return PlainTextResponse("Topilmadi", status_code=404)
+# ---------------------------------------------------------------- yordamchilar
+
+def err(code: str, status: int = 400):
+    raise HTTPException(status_code=status, detail=code)
 
 
-def current_user(request: Request, db: Session) -> User | None:
+@app.exception_handler(HTTPException)
+async def _http_error(request: Request, exc: HTTPException):
+    return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+
+
+def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     uid = request.session.get("uid")
-    return db.get(User, uid) if uid else None
-
-
-def require_user(request: Request, db: Session = Depends(get_db)) -> User:
-    user = current_user(request, db)
+    user = db.get(User, uid) if uid else None
     if not user:
-        raise LoginRequired()
+        err("auth", 401)
     return user
-
-
-def flash(request: Request, message: str, kind: str = "ok") -> None:
-    items = request.session.get("flashes", [])
-    items.append({"kind": kind, "message": message})
-    request.session["flashes"] = items
-
-
-def render(request: Request, name: str, **ctx):
-    ctx.setdefault("user", None)
-    ctx["flashes"] = request.session.pop("flashes", [])
-    ctx["settings"] = settings
-    return templates.TemplateResponse(request, name, ctx)
-
-
-def redirect(url: str) -> RedirectResponse:
-    return RedirectResponse(url, status_code=303)
 
 
 def owned_account(db: Session, user: User, account_id: int) -> IGAccount:
     acc = db.get(IGAccount, account_id)
     if not acc or acc.user_id != user.id:
-        raise NotFound()
+        err("not_found", 404)
     return acc
 
 
-def owned_rule(db: Session, user: User, rule_id: int) -> Rule:
-    rule = db.get(Rule, rule_id)
-    if not rule or rule.account.user_id != user.id:
-        raise NotFound()
-    return rule
+def owned_flow(db: Session, user: User, flow_id: int) -> Flow:
+    flow = db.get(Flow, flow_id)
+    if not flow or flow.account.user_id != user.id:
+        err("not_found", 404)
+    return flow
 
 
-# ---------- Sahifalar ----------
-
-@app.get("/")
-def index(request: Request, db: Session = Depends(get_db)):
-    if current_user(request, db):
-        return redirect("/dashboard")
-    return render(request, "index.html")
+def iso(dt) -> str | None:
+    return dt.isoformat() + "Z" if dt else None
 
 
-@app.get("/register")
-def register_page(request: Request):
-    return render(request, "auth.html", mode="register")
+def user_json(u: User) -> dict:
+    return {"id": u.id, "email": u.email, "name": u.name, "lang": u.lang, "is_admin": u.is_admin}
 
 
-@app.post("/register")
-def register(request: Request, name: str = Form(""), email: str = Form(...), password: str = Form(...),
-             db: Session = Depends(get_db)):
-    email = email.strip().lower()
-    if "@" not in email or len(email) > 255 or len(password) < 8:
-        flash(request, "Email to'g'ri bo'lishi va parol kamida 8 belgi bo'lishi kerak.", "error")
-        return redirect("/register")
+def account_json(a: IGAccount) -> dict:
+    return {"id": a.id, "username": a.username, "name": a.name, "picture_url": a.picture_url,
+            "active": a.active, "token_expires_at": iso(a.token_expires_at)}
+
+
+def flow_summary(f: Flow) -> dict:
+    trig = trigger_of(f.graph) or {}
+    d = trig.get("data") or {}
+    return {"id": f.id, "account_id": f.account_id, "name": f.name, "active": f.active, "runs": f.runs,
+            "trigger": {"kind": d.get("kind"), "keywords": d.get("keywords") or "", "match": d.get("match"),
+                        "media_caption": d.get("media_caption") or ""},
+            "nodes": len(f.graph["nodes"]), "updated_at": iso(f.updated_at), "created_at": iso(f.created_at)}
+
+
+def contact_json(c: Contact) -> dict:
+    return {"id": c.id, "igsid": c.igsid, "username": c.username, "name": c.name, "tags": c.tags,
+            "fields": c.fields, "follows": c.follows, "last_seen_at": iso(c.last_seen_at),
+            "created_at": iso(c.created_at)}
+
+
+def detect_lang(request: Request) -> str:
+    q = request.query_params.get("lang")
+    if q in LANGS:
+        return q
+    al = (request.headers.get("accept-language") or "").lower()
+    for code, lang in (("tg", "tj"), ("tj", "tj"), ("uz", "uz"), ("ru", "ru")):
+        if al.startswith(code) or f",{code}" in al:
+            return lang
+    return "en"
+
+
+# ---------------------------------------------------------------- auth
+
+@app.post("/api/auth/register")
+def register(request: Request, body: dict = Body(...), db: Session = Depends(get_db)):
+    email = str(body.get("email") or "").strip().lower()
+    password = str(body.get("password") or "")
+    name = str(body.get("name") or "").strip()[:120]
+    lang = body.get("lang") if body.get("lang") in LANGS else "ru"
+    if "@" not in email or len(email) > 255:
+        err("email_invalid")
+    if len(password) < 8:
+        err("password_short")
     if db.scalar(select(User).where(User.email == email)):
-        flash(request, "Bu email bilan ro'yxatdan o'tilgan. Kiring.", "error")
-        return redirect("/login")
-    user = User(email=email, name=name.strip()[:120], password_hash=hash_password(password))
+        err("email_taken")
+    user = User(email=email, name=name, password_hash=hash_password(password), lang=lang)
     db.add(user)
     db.commit()
     request.session.clear()
     request.session["uid"] = user.id
-    flash(request, "Xush kelibsiz! Endi Instagram akkauntingizni ulang.")
-    return redirect("/dashboard")
+    return {"user": user_json(user)}
 
 
-@app.get("/login")
-def login_page(request: Request):
-    return render(request, "auth.html", mode="login")
-
-
-@app.post("/login")
-def login(request: Request, email: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(User.email == email.strip().lower()))
-    if not user or not verify_password(password, user.password_hash):
-        flash(request, "Email yoki parol noto'g'ri.", "error")
-        return redirect("/login")
+@app.post("/api/auth/login")
+def login(request: Request, body: dict = Body(...), db: Session = Depends(get_db)):
+    user = db.scalar(select(User).where(User.email == str(body.get("email") or "").strip().lower()))
+    if not user or not verify_password(str(body.get("password") or ""), user.password_hash):
+        err("login_failed", 401)
     request.session.clear()
     request.session["uid"] = user.id
-    return redirect("/dashboard")
+    return {"user": user_json(user)}
 
 
-@app.get("/logout")
+@app.post("/api/auth/logout")
 def logout(request: Request):
     request.session.clear()
-    return redirect("/")
+    return {"ok": True}
 
 
-@app.get("/dashboard")
-def dashboard(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
-    account_ids = [a.id for a in user.accounts]
-    since = utcnow() - timedelta(hours=24)
-    sent_24h = 0
-    if account_ids:
-        sent_24h = db.scalar(select(func.count(EventLog.id)).where(
-            EventLog.account_id.in_(account_ids), EventLog.kind.in_(SEND_KINDS), EventLog.created_at >= since
-        )) or 0
-    return render(request, "dashboard.html", user=user, sent_24h=sent_24h, triggers=TRIGGERS, modes=MATCH_MODES, defaults=RULE_DEFAULTS)
+@app.get("/api/me")
+def me(user: User = Depends(current_user)):
+    return {"user": user_json(user), "accounts": [account_json(a) for a in user.accounts],
+            "ig_ready": settings.ig_ready}
 
 
-# ---------- Instagram ulash ----------
+@app.patch("/api/me")
+def update_me(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if "name" in body:
+        user.name = str(body["name"] or "").strip()[:120]
+    if body.get("lang") in LANGS:
+        user.lang = body["lang"]
+    if body.get("new_password"):
+        if not verify_password(str(body.get("password") or ""), user.password_hash):
+            err("password_wrong")
+        if len(str(body["new_password"])) < 8:
+            err("password_short")
+        user.password_hash = hash_password(str(body["new_password"]))
+    db.commit()
+    return {"user": user_json(user)}
+
+
+# ---------------------------------------------------------------- Instagram akkauntlar
 
 @app.get("/instagram/connect")
-def instagram_connect(request: Request, user: User = Depends(require_user)):
+def instagram_connect(request: Request, db: Session = Depends(get_db)):
+    if not request.session.get("uid"):
+        return RedirectResponse("/login", status_code=303)
     if not settings.ig_ready:
-        flash(request, "Server sozlanmagan: IG_APP_ID va IG_APP_SECRET .env faylida yo'q.", "error")
-        return redirect("/dashboard")
+        return RedirectResponse("/app/accounts?ig_error=not_configured", status_code=303)
     state = secrets.token_urlsafe(24)
     request.session["oauth_state"] = state
     return RedirectResponse(ig.authorize_url(state), status_code=302)
@@ -203,223 +221,269 @@ def instagram_connect(request: Request, user: User = Depends(require_user)):
 @app.get("/instagram/callback")
 def instagram_callback(request: Request, code: str | None = None, state: str | None = None,
                        error: str | None = None, error_description: str | None = None,
-                       user: User = Depends(require_user), db: Session = Depends(get_db)):
+                       db: Session = Depends(get_db)):
+    uid = request.session.get("uid")
+    user = db.get(User, uid) if uid else None
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    back = lambda e: RedirectResponse(f"/app/accounts?ig_error={quote(e[:300])}", status_code=303)  # noqa: E731
     expected = request.session.pop("oauth_state", None)
     if error or not code:
-        flash(request, f"Ulanish bekor qilindi: {error_description or error or 'kod yo‘q'}", "error")
-        return redirect("/dashboard")
+        return back(error_description or error or "cancelled")
     if not expected or state != expected:
-        flash(request, "Xavfsizlik tekshiruvi o'tmadi (state). Qaytadan urinib ko'ring.", "error")
-        return redirect("/dashboard")
-
+        return back("state")
     try:
         short = ig.exchange_code(code)
         token, expires_in = ig.get_long_lived_token(short["access_token"])
-        me = ig.get_me(token)
+        me_ = ig.get_me(token)
         ig.subscribe_webhooks(token)
     except (ig.IGError, KeyError) as e:
-        flash(request, f"Instagram xatosi: {e}", "error")
-        return redirect("/dashboard")
+        return back(str(e))
 
-    ig_user_id = str(me.get("user_id") or short.get("user_id"))
+    ig_user_id = str(me_.get("user_id") or short.get("user_id"))
     acc = db.scalar(select(IGAccount).where(IGAccount.ig_user_id == ig_user_id))
     if acc and acc.user_id != user.id:
-        flash(request, "Bu Instagram akkaunt boshqa foydalanuvchiga ulangan.", "error")
-        return redirect("/dashboard")
+        return back("account_taken")
     if not acc:
         acc = IGAccount(user_id=user.id, ig_user_id=ig_user_id, access_token_enc="")
         db.add(acc)
-    acc.scoped_id = str(me.get("id") or "")
-    acc.username = me.get("username") or ""
-    acc.name = me.get("name") or ""
-    acc.picture_url = me.get("profile_picture_url") or ""
+    acc.scoped_id = str(me_.get("id") or "")
+    acc.username = me_.get("username") or ""
+    acc.name = me_.get("name") or ""
+    acc.picture_url = me_.get("profile_picture_url") or ""
     acc.access_token_enc = encrypt(token)
     acc.token_expires_at = utcnow() + timedelta(seconds=expires_in or 60 * 86400)
     acc.active = True
     db.commit()
-    flash(request, f"@{acc.username} muvaffaqiyatli ulandi!")
-    return redirect("/dashboard")
+    return RedirectResponse(f"/app/accounts?connected={quote(acc.username)}", status_code=303)
 
 
-@app.post("/accounts/{account_id}/toggle")
-def account_toggle(account_id: int, request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+@app.post("/api/accounts/{account_id}/toggle")
+def account_toggle(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
     acc.active = not acc.active
     db.commit()
-    flash(request, f"@{acc.username}: avtojavob {'yoqildi' if acc.active else 'to‘xtatildi'}.")
-    return redirect("/dashboard")
+    return account_json(acc)
 
 
-@app.post("/accounts/{account_id}/disconnect")
-def account_disconnect(account_id: int, request: Request, user: User = Depends(require_user),
-                       db: Session = Depends(get_db)):
-    acc = owned_account(db, user, account_id)
-    db.delete(acc)
+@app.delete("/api/accounts/{account_id}")
+def account_delete(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    db.delete(owned_account(db, user, account_id))
     db.commit()
-    flash(request, "Akkaunt uzildi va uning qoidalari o'chirildi.")
-    return redirect("/dashboard")
+    return {"ok": True}
 
 
-# ---------- Qoidalar ----------
-
-RULE_DEFAULTS = {"gate_button": DEFAULT_GATE_BUTTON, "follow_button": DEFAULT_FOLLOW_BUTTON,
-                 "not_following_text": DEFAULT_NOT_FOLLOWING}
-
-def _media_for(acc: IGAccount) -> list[dict]:
+@app.get("/api/accounts/{account_id}/media")
+def account_media(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
     try:
-        return ig.list_media(decrypt(acc.access_token_enc))
-    except Exception:  # noqa: BLE001 — post ro'yxati bo'lmasa ham forma ishlayveradi
-        return []
+        items = ig.list_media(decrypt(acc.access_token_enc))
+    except Exception:  # noqa: BLE001
+        items = []
+    return {"items": [{"id": m.get("id"), "caption": (m.get("caption") or "")[:200],
+                       "thumbnail": m.get("thumbnail_url") or m.get("media_url"),
+                       "type": m.get("media_type"), "timestamp": m.get("timestamp")} for m in items]}
 
 
-class RuleForm:
-    """Qoida formasi maydonlari (yaratish va tahrirlash uchun umumiy)."""
+# ---------------------------------------------------------------- statistika
 
-    def __init__(self, name: str = Form(""), trigger: str = Form("comment"), keywords: str = Form(""),
-                 match_mode: str = Form("contains"), media: str = Form(""), comment_replies: str = Form(""),
-                 dm_text: str = Form(""), btn_title: list[str] = Form([]), btn_url: list[str] = Form([]),
-                 follow_gate: str = Form(""), gate_button: str = Form(""), reward_text: str = Form(""),
-                 not_following_text: str = Form(""), follow_button: str = Form("")):
-        self.name, self.trigger, self.keywords, self.match_mode = name, trigger, keywords, match_mode
-        self.media, self.comment_replies, self.dm_text = media, comment_replies, dm_text
-        self.btn_title, self.btn_url = btn_title, btn_url
-        self.follow_gate = follow_gate in ("1", "on", "true")
-        self.gate_button, self.reward_text = gate_button.strip(), reward_text.strip()
-        self.not_following_text, self.follow_button = not_following_text.strip(), follow_button.strip()
-
-
-def _apply_form(rule: Rule, f: RuleForm) -> str | None:
-    if f.trigger not in TRIGGERS or f.match_mode not in MATCH_MODES:
-        return "Noto'g'ri qiymat."
-    keywords = ", ".join(k.strip() for k in f.keywords.split(",") if k.strip())
-    if f.match_mode != "any" and not keywords:
-        return "Kamida bitta kalit so'z kiriting (yoki 'Har qanday matn' rejimini tanlang)."
-    if f.trigger == "comment" and not f.comment_replies.strip() and not f.dm_text.strip():
-        return "Izoh qoidasi uchun izohga javob yoki Direct matnidan kamida bittasi kerak."
-    if f.trigger == "dm" and not f.dm_text.strip():
-        return "Direct qoidasi uchun javob matni kerak."
-    if len(f.dm_text) > 1000 or any(len(line) > 1000 for line in f.comment_replies.splitlines()):
-        return "Matn juda uzun (maks. 1000 belgi)."
-
-    buttons = []
-    for title, url in zip(f.btn_title, f.btn_url):
-        title, url = title.strip(), url.strip()
-        if not title and not url:
-            continue
-        if not title or not url:
-            return "Har bir tugmaga ham nom, ham havola yozing."
-        if len(title) > 20:
-            return f"Tugma nomi 20 belgidan oshmasin: «{title}»."
-        if not url.startswith(("https://", "http://")):
-            return f"Havola https:// bilan boshlanishi kerak: {url}"
-        buttons.append({"title": title, "url": url})
-    if len(buttons) > 3:
-        return "Ko'pi bilan 3 ta tugma."
-
-    if f.follow_gate:
-        if not f.dm_text.strip():
-            return "Obuna tekshiruvi uchun Direct xabar matni kerak."
-        if not buttons and not f.reward_text:
-            return "Obuna tekshiruvidan keyin nima yuborilsin? Havola tugmasi yoki mukofot matnini kiriting."
-        for label, value in (("Tugma", f.gate_button), ("Tugma", f.follow_button)):
-            if len(value) > 20:
-                return f"{label} nomi 20 belgidan oshmasin: «{value}»."
-    if (buttons or f.follow_gate) and (len(f.dm_text) > 640 or len(f.reward_text) > 640
-                                        or len(f.not_following_text) > 640):
-        return "Tugmali xabar matni 640 belgidan oshmasin."
-
-    media_id, caption = (f.media.split("::", 1) + [""])[:2] if f.media else (None, "")
-    rule.name = f.name.strip()[:120] or "Qoida"
-    rule.trigger = f.trigger
-    rule.keywords = keywords
-    rule.match_mode = f.match_mode
-    rule.media_id = (media_id or None) if f.trigger == "comment" else None
-    rule.media_caption = caption[:250] if rule.media_id else ""
-    rule.comment_replies = f.comment_replies.strip() if f.trigger == "comment" else ""
-    rule.dm_text = f.dm_text.strip()
-    rule.buttons = buttons
-    rule.follow_gate = f.follow_gate
-    rule.gate_button = f.gate_button or DEFAULT_GATE_BUTTON
-    rule.reward_text = f.reward_text
-    rule.not_following_text = f.not_following_text or DEFAULT_NOT_FOLLOWING
-    rule.follow_button = f.follow_button or DEFAULT_FOLLOW_BUTTON
-    return None
-
-
-@app.get("/accounts/{account_id}/rules/new")
-def rule_new_page(account_id: int, request: Request, user: User = Depends(require_user),
-                  db: Session = Depends(get_db)):
+@app.get("/api/stats")
+def stats(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
-    return render(request, "rule_form.html", user=user, account=acc, rule=None, media=_media_for(acc),
-                  triggers=TRIGGERS, modes=MATCH_MODES, defaults=RULE_DEFAULTS)
+    now = utcnow()
+    sent = lambda since: db.scalar(select(func.count(EventLog.id)).where(  # noqa: E731
+        EventLog.account_id == acc.id, EventLog.kind.in_(SEND_KINDS), EventLog.created_at >= since)) or 0
+    return {
+        "sent_24h": sent(now - timedelta(hours=24)),
+        "sent_7d": sent(now - timedelta(days=7)),
+        "contacts": db.scalar(select(func.count(Contact.id)).where(Contact.account_id == acc.id)) or 0,
+        "contacts_7d": db.scalar(select(func.count(Contact.id)).where(
+            Contact.account_id == acc.id, Contact.created_at >= now - timedelta(days=7))) or 0,
+        "flows_active": db.scalar(select(func.count(Flow.id)).where(
+            Flow.account_id == acc.id, Flow.active.is_(True))) or 0,
+        "flows_total": db.scalar(select(func.count(Flow.id)).where(Flow.account_id == acc.id)) or 0,
+        "runs_total": db.scalar(select(func.sum(Flow.runs)).where(Flow.account_id == acc.id)) or 0,
+    }
 
 
-@app.post("/accounts/{account_id}/rules/new")
-def rule_create(account_id: int, request: Request, form: RuleForm = Depends(),
-                user: User = Depends(require_user), db: Session = Depends(get_db)):
+# ---------------------------------------------------------------- ssenariylar
+
+@app.get("/api/templates")
+def templates_list(user: User = Depends(current_user)):
+    return {"items": list_templates(user.lang)}
+
+
+@app.get("/api/flows")
+def flows_list(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
-    rule = Rule(account_id=acc.id, name="")
-    err = _apply_form(rule, form)
-    if err:
-        flash(request, err, "error")
-        return render(request, "rule_form.html", user=user, account=acc, rule=rule, media=_media_for(acc),
-                      triggers=TRIGGERS, modes=MATCH_MODES, defaults=RULE_DEFAULTS)
-    db.add(rule)
+    return {"items": [flow_summary(f) for f in sorted(acc.flows, key=lambda f: f.id, reverse=True)]}
+
+
+def _sync_trigger(flow: Flow) -> None:
+    trig = trigger_of(flow.graph) or {}
+    flow.trigger_kind = (trig.get("data") or {}).get("kind") or ""
+
+
+@app.post("/api/flows")
+def flow_create(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, int(body.get("account_id") or 0))
+    template = body.get("template")
+    if template:
+        try:
+            name, graph = build_template(str(template), user.lang)
+        except KeyError:
+            err("template_not_found")
+    else:
+        name, graph = "", blank_graph()
+    flow = Flow(account_id=acc.id, name=(str(body.get("name") or "").strip() or name or "Flow")[:120])
+    flow.graph = graph
+    _sync_trigger(flow)
+    db.add(flow)
     db.commit()
-    flash(request, f"«{rule.name}» qoidasi yaratildi.")
-    return redirect("/dashboard")
+    return flow_summary(flow)
 
 
-@app.get("/rules/{rule_id}/edit")
-def rule_edit_page(rule_id: int, request: Request, user: User = Depends(require_user),
+@app.get("/api/flows/{flow_id}")
+def flow_get(flow_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    flow = owned_flow(db, user, flow_id)
+    return {**flow_summary(flow), "graph": flow.graph, "errors": validate_graph(flow.graph)}
+
+
+@app.put("/api/flows/{flow_id}")
+def flow_save(flow_id: int, body: dict = Body(...), user: User = Depends(current_user),
+              db: Session = Depends(get_db)):
+    flow = owned_flow(db, user, flow_id)
+    if "name" in body:
+        flow.name = str(body["name"] or "").strip()[:120] or flow.name
+    if "graph" in body:
+        graph = body["graph"] or {}
+        if len(json.dumps(graph)) > 500_000:
+            err("graph_too_large")
+        # Faqat kerakli maydonlarni saqlaymiz
+        flow.graph = {
+            "nodes": [{"id": str(n.get("id")), "type": n.get("type"), "data": n.get("data") or {},
+                       "position": {"x": float((n.get("position") or {}).get("x") or 0),
+                                    "y": float((n.get("position") or {}).get("y") or 0)}}
+                      for n in graph.get("nodes") or []],
+            "edges": [{"id": str(e.get("id")), "source": e.get("source"), "target": e.get("target"),
+                       "sourceHandle": e.get("sourceHandle") or "out"} for e in graph.get("edges") or []],
+        }
+        _sync_trigger(flow)
+    errors = validate_graph(flow.graph)
+    if "active" in body:
+        flow.active = bool(body["active"])
+    if errors and flow.active:
+        flow.active = False
+    flow.updated_at = utcnow()
+    db.commit()
+    return {**flow_summary(flow), "errors": errors}
+
+
+@app.post("/api/flows/{flow_id}/duplicate")
+def flow_duplicate(flow_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    src = owned_flow(db, user, flow_id)
+    copy = Flow(account_id=src.account_id, name=f"{src.name} (2)"[:120], graph_json=src.graph_json,
+                trigger_kind=src.trigger_kind, active=False)
+    db.add(copy)
+    db.commit()
+    return flow_summary(copy)
+
+
+@app.delete("/api/flows/{flow_id}")
+def flow_delete(flow_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    db.delete(owned_flow(db, user, flow_id))
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/flows/{flow_id}/stats")
+def flow_stats(flow_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    flow = owned_flow(db, user, flow_id)
+    out: dict[str, dict[str, int]] = {}
+    for s in db.scalars(select(NodeStat).where(NodeStat.flow_id == flow.id)):
+        out.setdefault(s.node_id, {})[s.key] = s.count
+    return {"runs": flow.runs, "nodes": out}
+
+
+# ---------------------------------------------------------------- kontaktlar
+
+def _contacts_query(db: Session, acc: IGAccount, q: str, tag: str):
+    stmt = select(Contact).where(Contact.account_id == acc.id)
+    if q:
+        like = f"%{q.lower()}%"
+        stmt = stmt.where(or_(func.lower(Contact.username).like(like), func.lower(Contact.name).like(like),
+                              func.lower(Contact.fields_json).like(like)))
+    if tag:
+        stmt = stmt.where(Contact.tags_json.like(f'%{json.dumps(tag, ensure_ascii=False)}%'))
+    return stmt
+
+
+@app.get("/api/contacts")
+def contacts_list(account_id: int, q: str = "", tag: str = "", page: int = 1,
+                  user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    stmt = _contacts_query(db, acc, q.strip(), tag.strip())
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    per = 50
+    rows = db.scalars(stmt.order_by(Contact.last_seen_at.desc()).offset((max(page, 1) - 1) * per).limit(per)).all()
+    all_tags: set[str] = set()
+    for (tags_json,) in db.execute(select(Contact.tags_json).where(Contact.account_id == acc.id)):
+        try:
+            all_tags.update(json.loads(tags_json or "[]"))
+        except ValueError:
+            pass
+    return {"items": [contact_json(c) for c in rows], "total": total, "per_page": per,
+            "tags": sorted(all_tags)}
+
+
+@app.patch("/api/contacts/{contact_id}")
+def contact_update(contact_id: int, body: dict = Body(...), user: User = Depends(current_user),
                    db: Session = Depends(get_db)):
-    rule = owned_rule(db, user, rule_id)
-    return render(request, "rule_form.html", user=user, account=rule.account, rule=rule,
-                  media=_media_for(rule.account), triggers=TRIGGERS, modes=MATCH_MODES, defaults=RULE_DEFAULTS)
-
-
-@app.post("/rules/{rule_id}/edit")
-def rule_update(rule_id: int, request: Request, form: RuleForm = Depends(),
-                user: User = Depends(require_user), db: Session = Depends(get_db)):
-    rule = owned_rule(db, user, rule_id)
-    err = _apply_form(rule, form)
-    if err:
-        db.rollback()
-        flash(request, err, "error")
-        return redirect(f"/rules/{rule_id}/edit")
+    c = db.get(Contact, contact_id)
+    if not c or c.account.user_id != user.id:
+        err("not_found", 404)
+    if isinstance(body.get("tags"), list):
+        c.tags = body["tags"]
+    if isinstance(body.get("fields"), dict):
+        c.fields = {str(k)[:30]: str(v)[:500] for k, v in body["fields"].items()}
+    if "name" in body:
+        c.name = str(body["name"] or "")[:255]
     db.commit()
-    flash(request, "Qoida saqlandi.")
-    return redirect("/dashboard")
+    return contact_json(c)
 
 
-@app.post("/rules/{rule_id}/toggle")
-def rule_toggle(rule_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
-    rule = owned_rule(db, user, rule_id)
-    rule.active = not rule.active
-    db.commit()
-    return redirect("/dashboard")
+@app.get("/api/contacts/export.csv")
+def contacts_export(account_id: int, q: str = "", tag: str = "", user: User = Depends(current_user),
+                    db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    rows = db.scalars(_contacts_query(db, acc, q.strip(), tag.strip()).order_by(Contact.id)).all()
+    keys = sorted({k for c in rows for k in c.fields})
+    buf = io.StringIO()
+    buf.write("﻿")  # Excel UTF-8 ni to'g'ri ochishi uchun
+    w = csv.writer(buf)
+    w.writerow(["username", "name", "tags", "follows", "first_seen", "last_seen", *keys])
+    for c in rows:
+        w.writerow([c.username, c.name, ", ".join(c.tags), "" if c.follows is None else int(c.follows),
+                    iso(c.created_at), iso(c.last_seen_at), *[c.fields.get(k, "") for k in keys]])
+    buf.seek(0)
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="contacts-{acc.username}.csv"'})
 
 
-@app.post("/rules/{rule_id}/delete")
-def rule_delete(rule_id: int, request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
-    rule = owned_rule(db, user, rule_id)
-    db.delete(rule)
-    db.commit()
-    flash(request, "Qoida o'chirildi.")
-    return redirect("/dashboard")
+# ---------------------------------------------------------------- faollik
+
+@app.get("/api/activity")
+def activity(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    rows = db.scalars(select(EventLog).where(EventLog.account_id == acc.id)
+                      .order_by(EventLog.id.desc()).limit(200)).all()
+    names = {f.id: f.name for f in acc.flows}
+    return {"items": [{"id": r.id, "kind": r.kind, "username": r.username, "incoming": r.incoming,
+                       "detail": r.detail, "flow_id": r.flow_id, "flow_name": names.get(r.flow_id or 0, ""),
+                       "created_at": iso(r.created_at)} for r in rows]}
 
 
-@app.get("/logs")
-def logs_page(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
-    accounts = {a.id: a for a in user.accounts}
-    rows = []
-    if accounts:
-        rows = db.scalars(select(EventLog).where(EventLog.account_id.in_(accounts.keys()))
-                          .order_by(EventLog.id.desc()).limit(200)).all()
-    return render(request, "logs.html", user=user, rows=rows, accounts=accounts)
-
-
-# ---------- Meta webhook ----------
+# ---------------------------------------------------------------- Meta webhook
 
 @app.get("/webhook")
 def webhook_verify(request: Request):
@@ -431,13 +495,12 @@ def webhook_verify(request: Request):
 
 
 def _webhook_summary(payload: dict) -> str:
-    """Logga qisqa: qaysi akkauntga qanday hodisa keldi (matnlarsiz)."""
     parts = []
     for entry in payload.get("entry", []) if isinstance(payload, dict) else []:
         kinds = [c.get("field", "?") for c in entry.get("changes", [])]
         for ev in entry.get("messaging", []):
             if "postback" in ev:
-                kinds.append(f"postback({(ev['postback'].get('payload') or '')[:20]})")
+                kinds.append("postback")
             elif (ev.get("message") or {}).get("is_echo"):
                 kinds.append("echo")
             elif "message" in ev:
@@ -463,21 +526,26 @@ async def webhook_receive(request: Request, background: BackgroundTasks):
     return PlainTextResponse("EVENT_RECEIVED")
 
 
-# ---------- Meta talab qiladigan sahifalar ----------
+# ---------------------------------------------------------------- Meta talab qiladigan sahifalar
+
+def _legal(request: Request, page: str, code: str = ""):
+    return templates.TemplateResponse(request, "legal.html", {"page": page, "lang": detect_lang(request),
+                                                              "settings": settings, "code": code})
+
 
 @app.get("/privacy")
 def privacy(request: Request):
-    return render(request, "legal.html", page="privacy")
+    return _legal(request, "privacy")
 
 
 @app.get("/terms")
 def terms(request: Request):
-    return render(request, "legal.html", page="terms")
+    return _legal(request, "terms")
 
 
 @app.get("/data-deletion")
 def data_deletion_page(request: Request, code: str = ""):
-    return render(request, "legal.html", page="deletion", code=code)
+    return _legal(request, "deletion", code)
 
 
 def _delete_by_signed_request(signed_request: str, db: Session) -> bool:
@@ -503,3 +571,22 @@ def data_deletion_callback(signed_request: str = Form(...), db: Session = Depend
 def deauthorize_callback(signed_request: str = Form(...), db: Session = Depends(get_db)):
     _delete_by_signed_request(signed_request, db)
     return PlainTextResponse("ok")
+
+
+# ---------------------------------------------------------------- React ilova (SPA)
+
+if (WEB_DIR / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
+
+
+@app.get("/{path:path}", include_in_schema=False)
+def spa(path: str):
+    if path.startswith(("api/", "webhook")):
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    static = (WEB_DIR / path).resolve()
+    if path and static.is_file() and WEB_DIR.resolve() in static.parents:
+        return FileResponse(static)
+    index = WEB_DIR / "index.html"
+    if index.is_file():
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})
+    return PlainTextResponse("Frontend build topilmadi (app/web).", status_code=503)

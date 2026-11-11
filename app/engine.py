@@ -1,18 +1,16 @@
-"""Webhook hodisalarini qayta ishlash: qoidani topish va javob yuborish.
+"""Ssenariy dvigateli: webhook hodisasi -> trigger -> bloklar zanjiri.
 
-Oqim:
-  izoh / Direct  ──►  qoida topiladi  ──►  birinchi xabar
-     • obuna tekshiruvi o'chiq:  matn + havola tugmalari
-     • obuna tekshiruvi yoqiq:   matn + [Havolani olish]  (postback "G:<rule_id>")
-  [Havolani olish] / [Obuna bo'ldim] bosilganda  ──►  is_user_follow_business
-     • obuna bo'lgan:   mukofot matni + havola tugmalari
-     • obuna emas:      "avval obuna bo'ling" + [Profilga o'tish] [Obuna bo'ldim ✅]
+Instagram qoidalari (kodda hisobga olingan):
+  * Izohga javoban faqat 1 ta "private reply" yuborish mumkin. Mijoz tugma bosmaguncha yoki
+    yozmaguncha unga yana xabar yuborib bo'lmaydi.
+  * Mijoz oxirgi marta yozgan/bosgandan keyin 24 soat ichida xabar yuborish mumkin.
 """
 
 import hashlib
 import logging
 import random
 import re
+from dataclasses import dataclass, field
 from datetime import timedelta
 
 from sqlalchemy import func, select
@@ -22,49 +20,40 @@ from sqlalchemy.orm import Session
 from . import instagram as ig
 from .config import settings
 from .db import SessionLocal
-from .models import (DEFAULT_FOLLOW_BUTTON, DEFAULT_GATE_BUTTON, DEFAULT_NOT_FOLLOWING, SEND_KINDS,
-                     EventLog, IGAccount, ProcessedEvent, Rule, utcnow)
+from .flows import field_key, trigger_of
+from .models import (SEND_KINDS, Contact, EventLog, Flow, FlowSession, IGAccount, NodeStat, ProcessedEvent,
+                     ScheduledJob, utcnow)
 from .security import decrypt, encrypt
 
 log = logging.getLogger("engine")
 
 _APOSTROPHES = re.compile(r"[‘’ʻʼ`´]")
-GATE_PREFIX = "G:"
+FLOW_PREFIX = "F:"
+MAX_STEPS = 25
+SESSION_TTL = timedelta(hours=24)
 
+
+# ---------------------------------------------------------------- yordamchilar
 
 def normalize(text: str) -> str:
     text = _APOSTROPHES.sub("'", text or "").lower()
     return " ".join(text.split())
 
 
-def rule_matches(rule: Rule, text: str) -> bool:
-    if rule.match_mode == "any":
+def keyword_match(data: dict, text: str) -> bool:
+    match = data.get("match") or "contains"
+    if match == "any":
         return True
     t = normalize(text)
-    keywords = [normalize(k) for k in rule.keyword_list]
-    if rule.match_mode == "exact":
+    keywords = [normalize(k) for k in (data.get("keywords") or "").split(",") if k.strip()]
+    if match == "exact":
         return t in keywords
     return any(k and k in t for k in keywords)
 
 
-def find_rule(db: Session, account: IGAccount, trigger: str, text: str, media_id: str | None = None) -> Rule | None:
-    rules = db.scalars(
-        select(Rule).where(Rule.account_id == account.id, Rule.active.is_(True), Rule.trigger == trigger).order_by(Rule.id)
-    ).all()
-    # Avval aniq postga bog'langan qoidalar, keyin "barcha postlar" qoidalari
-    rules = sorted(rules, key=lambda r: (r.media_id is None, r.id))
-    for rule in rules:
-        if rule.media_id and rule.media_id != media_id:
-            continue
-        if rule_matches(rule, text):
-            return rule
-    return None
-
-
 def mark_processed(db: Session, key: str) -> bool:
     """True — yangi hodisa; False — avval ishlangan."""
-    # Instagram mid'lari ~200 belgi bo'ladi — ustunga sig'ishi uchun xeshlaymiz
-    if len(key) > 64:
+    if len(key) > 64:  # Instagram mid'lari ~200 belgi
         prefix, _, rest = key.partition(":")
         key = f"{prefix}:#{hashlib.sha256(rest.encode()).hexdigest()}"
     db.add(ProcessedEvent(key=key))
@@ -81,199 +70,419 @@ def mark_processed(db: Session, key: str) -> bool:
 
 def sends_last_hour(db: Session, account_id: int) -> int:
     since = utcnow() - timedelta(hours=1)
-    return db.scalar(
-        select(func.count(EventLog.id)).where(
-            EventLog.account_id == account_id, EventLog.kind.in_(SEND_KINDS), EventLog.created_at >= since
-        )
-    ) or 0
+    return db.scalar(select(func.count(EventLog.id)).where(
+        EventLog.account_id == account_id, EventLog.kind.in_(SEND_KINDS), EventLog.created_at >= since)) or 0
 
 
-def _log(db: Session, account: IGAccount, kind: str, rule: Rule | None = None, username: str = "",
-         incoming: str = "", detail: str = "") -> None:
-    db.add(EventLog(account_id=account.id, rule_id=rule.id if rule else None, kind=kind,
-                    username=username, incoming=incoming[:1000], detail=detail[:1000]))
+def bump(db: Session, flow_id: int, node_id: str, key: str) -> None:
+    stat = db.scalar(select(NodeStat).where(NodeStat.flow_id == flow_id, NodeStat.node_id == node_id,
+                                            NodeStat.key == key))
+    if stat:
+        stat.count += 1
+    else:
+        db.add(NodeStat(flow_id=flow_id, node_id=node_id, key=key, count=1))
+    try:
+        db.commit()
+    except IntegrityError:  # parallel yozuv — keyingi safar sanaladi
+        db.rollback()
+
+
+def get_contact(db: Session, account: IGAccount, igsid: str, username: str = "") -> Contact:
+    contact = db.scalar(select(Contact).where(Contact.account_id == account.id, Contact.igsid == igsid))
+    if not contact:
+        contact = Contact(account_id=account.id, igsid=igsid, username=username[:120])
+        db.add(contact)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            contact = db.scalar(select(Contact).where(Contact.account_id == account.id, Contact.igsid == igsid))
+    if username and contact.username != username:
+        contact.username = username[:120]
+    contact.last_seen_at = utcnow()
+    db.commit()
+    return contact
+
+
+def touch_inbound(db: Session, contact: Contact) -> None:
+    contact.last_inbound_at = utcnow()
+    contact.last_seen_at = utcnow()
     db.commit()
 
 
-def _fill(template: str, username: str) -> str:
-    return template.replace("{username}", f"@{username}" if username else "").strip()
+def fill(template: str, contact: Contact) -> str:
+    values = {"username": f"@{contact.username}" if contact.username else "", "name": contact.name or ""}
+    values.update({k: str(v) for k, v in contact.fields.items()})
+    return re.sub(r"\{([a-z_][a-z0-9_]*)\}", lambda m: values.get(m.group(1), ""), template or "").strip()
 
 
-def _over_limit(db: Session, account: IGAccount, rule: Rule, username: str, text: str) -> bool:
-    if sends_last_hour(db, account.id) >= settings.HOURLY_SEND_LIMIT:
-        _log(db, account, "skipped", rule, username, text, "Soatlik limitga yetildi")
-        return True
+# ---------------------------------------------------------------- graf
+
+class Graph:
+    def __init__(self, data: dict):
+        self.nodes = {n["id"]: n for n in data.get("nodes", []) if n.get("id")}
+        self.edges = data.get("edges", [])
+
+    def next(self, node_id: str, handle: str = "out") -> str | None:
+        for e in self.edges:
+            if e.get("source") == node_id and (e.get("sourceHandle") or "out") == handle:
+                return e.get("target")
+        return None
+
+
+@dataclass
+class Ctx:
+    db: Session
+    account: IGAccount
+    contact: Contact
+    flow: Flow
+    graph: Graph
+    token: str
+    comment_id: str | None = None   # private reply uchun (bir marta)
+    private_used: bool = False
+    incoming: str = ""
+    sent: list = field(default_factory=list)
+
+    def log(self, kind: str, detail: str = "") -> None:
+        self.db.add(EventLog(account_id=self.account.id, flow_id=self.flow.id, contact_id=self.contact.id,
+                             kind=kind, username=self.contact.username, incoming=self.incoming[:1000],
+                             detail=detail[:1000]))
+        self.db.commit()
+
+
+def make_ctx(db: Session, account: IGAccount, contact: Contact, flow: Flow, **kw) -> Ctx:
+    return Ctx(db=db, account=account, contact=contact, flow=flow, graph=Graph(flow.graph),
+               token=decrypt(account.access_token_enc), **kw)
+
+
+def describe(text: str, buttons: list[dict]) -> str:
+    return text + ("  " + " ".join(f"[{b['title']}]" for b in buttons) if buttons else "")
+
+
+def send(ctx: Ctx, message: dict, desc: str) -> bool:
+    if sends_last_hour(ctx.db, ctx.account.id) >= settings.HOURLY_SEND_LIMIT:
+        ctx.log("skipped", "limit")
+        return False
+    try:
+        if ctx.comment_id and not ctx.private_used:
+            ig.private_reply(ctx.token, ctx.comment_id, message)
+            ctx.private_used = True
+            ctx.log("private_reply", desc)
+        elif ctx.contact.can_message():
+            ig.send_dm(ctx.token, ctx.contact.igsid, message)
+            ctx.log("dm_reply", desc)
+        else:
+            # Instagram ruxsat bermaydi: mijoz javob bermaguncha kutish kerak
+            ctx.log("skipped", "wait_user")
+            return False
+    except ig.IGError as e:
+        ctx.log("error", f"{desc[:200]} → {e}")
+        return False
+    ctx.sent.append(message)
+    return True
+
+
+# ---------------------------------------------------------------- bloklar
+
+def build_message(ctx: Ctx, node: dict) -> tuple[dict, str]:
+    d = node.get("data") or {}
+    text = fill(d.get("text", ""), ctx.contact)
+    buttons = []
+    for b in (d.get("buttons") or [])[:3]:
+        title = (b.get("title") or "").strip()[:20]
+        if not title:
+            continue
+        if b.get("kind") == "url":
+            buttons.append(ig.url_button(title, b.get("url") or ""))
+        else:
+            buttons.append(ig.postback_button(title, f"{FLOW_PREFIX}{ctx.flow.id}:{node['id']}:{b.get('id')}"))
+    return ig.build_message(text, buttons), describe(text, buttons)
+
+
+def check_follows(ctx: Ctx) -> bool:
+    try:
+        profile = ig.get_user_profile(ctx.token, ctx.contact.igsid)
+    except ig.IGError as e:
+        ctx.log("error", f"follow_check → {e}")
+        return True  # tekshirib bo'lmasa — mijozni to'xtatmaymiz
+    if profile.get("username") and not ctx.contact.username:
+        ctx.contact.username = profile["username"][:120]
+    ctx.contact.follows = bool(profile.get("is_user_follow_business"))
+    ctx.db.commit()
+    return ctx.contact.follows
+
+
+def evaluate(ctx: Ctx, d: dict) -> bool:
+    check = d.get("check")
+    if check == "follows":
+        return check_follows(ctx)
+    if check == "has_tag":
+        return (d.get("tag") or "").strip() in ctx.contact.tags
+    if check == "has_field":
+        return bool(ctx.contact.fields.get((d.get("field") or "").strip().lower()))
     return False
 
 
-# ---------- Xabarlarni yig'ish ----------
-
-def link_buttons(rule: Rule) -> list[dict]:
-    return [ig.url_button(b["title"], b["url"]) for b in rule.buttons]
-
-
-def _describe(text: str, buttons: list[dict]) -> str:
-    if not buttons:
-        return text
-    return text + "  " + " ".join(f"[{b['title']}]" for b in buttons)
-
-
-def opening_message(rule: Rule, username: str) -> tuple[dict, str]:
-    """Birinchi Direct xabar: (API uchun message, tarix uchun tavsif)."""
-    text = _fill(rule.dm_text, username)
-    if rule.follow_gate:
-        buttons = [ig.postback_button(rule.gate_button or DEFAULT_GATE_BUTTON, f"{GATE_PREFIX}{rule.id}")]
-    else:
-        buttons = link_buttons(rule)
-    return ig.build_message(text, buttons), _describe(text, buttons)
+def apply_action(ctx: Ctx, d: dict) -> None:
+    c = ctx.contact
+    op = d.get("op")
+    if op == "add_tag":
+        c.tags = c.tags + [d.get("tag", "")]
+    elif op == "remove_tag":
+        c.tags = [t for t in c.tags if t != (d.get("tag") or "").strip()]
+    elif op == "set_field":
+        fields = c.fields
+        fields[(d.get("field") or "").strip().lower()] = fill(d.get("value", ""), c)[:500]
+        c.fields = fields
+    ctx.db.commit()
 
 
-def reward_message(rule: Rule, username: str) -> tuple[dict, str]:
-    text = _fill(rule.reward_text or rule.dm_text, username)
-    buttons = link_buttons(rule)
-    return ig.build_message(text, buttons), _describe(text, buttons)
+def run_from(ctx: Ctx, node_id: str | None) -> None:
+    db, g = ctx.db, ctx.graph
+    for _ in range(MAX_STEPS):
+        if not node_id:
+            return
+        node = g.nodes.get(node_id)
+        if not node:
+            return
+        ntype, d = node.get("type"), node.get("data") or {}
+
+        if ntype == "trigger":
+            node_id = g.next(node_id)
+        elif ntype == "message":
+            message, desc = build_message(ctx, node)
+            if not send(ctx, message, desc):
+                return
+            bump(db, ctx.flow.id, node_id, "sent")
+            node_id = g.next(node_id)
+        elif ntype == "question":
+            if not send(ctx, ig.build_message(fill(d.get("text", ""), ctx.contact)), fill(d.get("text", ""), ctx.contact)):
+                return
+            bump(db, ctx.flow.id, node_id, "sent")
+            for s in db.scalars(select(FlowSession).where(FlowSession.contact_id == ctx.contact.id)):
+                db.delete(s)
+            db.flush()
+            db.add(FlowSession(contact_id=ctx.contact.id, flow_id=ctx.flow.id, node_id=node_id,
+                               expires_at=utcnow() + SESSION_TTL))
+            db.commit()
+            return
+        elif ntype == "condition":
+            ok = evaluate(ctx, d)
+            bump(db, ctx.flow.id, node_id, "yes" if ok else "no")
+            node_id = g.next(node_id, "yes" if ok else "no")
+        elif ntype == "action":
+            apply_action(ctx, d)
+            bump(db, ctx.flow.id, node_id, "done")
+            node_id = g.next(node_id)
+        elif ntype == "delay":
+            target = g.next(node_id)
+            if target:
+                minutes = int(d.get("amount") or 1) * (60 if d.get("unit") == "hours" else 1)
+                db.add(ScheduledJob(contact_id=ctx.contact.id, flow_id=ctx.flow.id, node_id=target,
+                                    run_at=utcnow() + timedelta(minutes=minutes)))
+                db.commit()
+                bump(db, ctx.flow.id, node_id, "scheduled")
+            return
+        else:
+            return
+    ctx.log("error", "loop_limit")
 
 
-def not_following_message(rule: Rule, account: IGAccount, username: str) -> tuple[dict, str]:
-    text = _fill(rule.not_following_text or DEFAULT_NOT_FOLLOWING, username)
-    buttons = [
-        ig.url_button("Profilga o'tish", f"https://www.instagram.com/{account.username}/"),
-        ig.postback_button(rule.follow_button or DEFAULT_FOLLOW_BUTTON, f"{GATE_PREFIX}{rule.id}"),
-    ]
-    return ig.build_message(text, buttons), _describe(text, buttons)
+# ---------------------------------------------------------------- triggerlar
+
+def find_flow(db: Session, account: IGAccount, kind: str, text: str, media_id: str | None = None):
+    flows = db.scalars(select(Flow).where(Flow.account_id == account.id, Flow.active.is_(True),
+                                          Flow.trigger_kind == kind).order_by(Flow.id)).all()
+    candidates = []
+    for f in flows:
+        trig = trigger_of(f.graph)
+        if not trig:
+            continue
+        d = trig.get("data") or {}
+        if d.get("media_id") and d.get("media_id") != media_id:
+            continue
+        if kind == "story_mention" or keyword_match(d, text):
+            candidates.append((not d.get("media_id"), d.get("match") == "any", f.id, f, trig))
+    if not candidates:
+        return None, None
+    candidates.sort(key=lambda c: c[:3])  # aniq post > kalit so'z > "har qanday"
+    return candidates[0][3], candidates[0][4]
 
 
-# ---------- Hodisalar ----------
+def start_flow(ctx: Ctx, trig: dict) -> None:
+    ctx.flow.runs += 1
+    ctx.db.commit()
+    bump(ctx.db, ctx.flow.id, trig["id"], "runs")
+    run_from(ctx, ctx.graph.next(trig["id"]))
+
 
 def handle_comment(db: Session, account: IGAccount, value: dict) -> None:
     sender = value.get("from") or {}
-    if str(sender.get("id")) == account.ig_user_id:
-        return  # o'zimizning izoh/javobimiz — sikl bo'lmasin
+    sender_id = str(sender.get("id") or "")
+    if not sender_id or sender_id == account.ig_user_id:
+        return  # o'zimizning izoh/javobimiz
     comment_id = value.get("id")
     if not comment_id:
         return
     text = value.get("text") or ""
-    username = sender.get("username") or ""
     media_id = (value.get("media") or {}).get("id")
 
-    rule = find_rule(db, account, "comment", text, media_id)
-    if not rule:
+    flow, trig = find_flow(db, account, "comment", text, media_id)
+    if not flow or not mark_processed(db, f"c:{comment_id}"):
         return
-    if not mark_processed(db, f"c:{comment_id}"):
-        return
-    if _over_limit(db, account, rule, username, text):
-        return
+    contact = get_contact(db, account, sender_id, sender.get("username") or "")
+    ctx = make_ctx(db, account, contact, flow, comment_id=comment_id, incoming=text)
 
-    token = decrypt(account.access_token_enc)
-
-    variants = rule.reply_variants
+    variants = [v.strip() for v in (trig["data"].get("comment_replies") or "").splitlines() if v.strip()]
     if variants:
-        reply = _fill(random.choice(variants), username)
+        reply = fill(random.choice(variants), contact)
         try:
-            ig.reply_to_comment(token, comment_id, reply)
-            _log(db, account, "comment_reply", rule, username, text, reply)
+            ig.reply_to_comment(ctx.token, comment_id, reply)
+            ctx.log("comment_reply", reply)
         except ig.IGError as e:
-            _log(db, account, "error", rule, username, text, f"Izohga javob: {e}")
+            ctx.log("error", f"comment_reply → {e}")
+    start_flow(ctx, trig)
 
-    if rule.dm_text.strip():
-        message, desc = opening_message(rule, username)
-        try:
-            ig.private_reply(token, comment_id, message)
-            _log(db, account, "private_reply", rule, username, text, desc)
-        except ig.IGError as e:
-            _log(db, account, "error", rule, username, text, f"Direct (private reply): {e}")
 
-    rule.hits += 1
+def handle_answer(db: Session, account: IGAccount, contact: Contact, session: FlowSession, text: str) -> None:
+    flow = db.get(Flow, session.flow_id)
+    if not flow or not flow.active:
+        db.delete(session)
+        db.commit()
+        return
+    ctx = make_ctx(db, account, contact, flow, incoming=text)
+    node = ctx.graph.nodes.get(session.node_id)
+    if not node:
+        db.delete(session)
+        db.commit()
+        return
+    d = node.get("data") or {}
+    value = text.strip()
+    validator = d.get("validate") or "any"
+    valid = {
+        "any": bool(value),
+        "phone": 7 <= len(re.sub(r"\D", "", value)) <= 15 and bool(re.fullmatch(r"[\d\s()+\-.]+", value)),
+        "email": bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value)),
+        "number": bool(re.fullmatch(r"-?\d+([.,]\d+)?", value)),
+    }.get(validator, bool(value))
+
+    if not valid:
+        session.attempts += 1
+        db.commit()
+        if session.attempts >= 3:
+            db.delete(session)
+            db.commit()
+            ctx.log("skipped", "answer_attempts")
+            return
+        err = fill(d.get("error_text") or "", contact)
+        if err:
+            send(ctx, ig.build_message(err), err)
+        return
+
+    key = field_key(d)
+    fields = contact.fields
+    fields[key] = value[:500]
+    contact.fields = fields
+    if key == "name" and not contact.name:
+        contact.name = value[:255]
+    db.delete(session)
     db.commit()
+    bump(db, flow.id, node["id"], "answered")
+    ctx.log("answer", f"{key} = {value[:100]}")
+    run_from(ctx, ctx.graph.next(node["id"]))
 
 
-def handle_text_message(db: Session, account: IGAccount, sender_id: str, message: dict) -> None:
-    mid = message.get("mid")
-    text = message.get("text") or ""
-    if not mid or not text:
-        return
-
-    rule = find_rule(db, account, "dm", text)
-    if not rule or not rule.dm_text.strip():
-        return
-    if not mark_processed(db, f"m:{mid}"):
-        return
-    if _over_limit(db, account, rule, "", text):
-        return
-
-    token = decrypt(account.access_token_enc)
-    msg, desc = opening_message(rule, "")
-    try:
-        ig.send_dm(token, sender_id, msg)
-        _log(db, account, "dm_reply", rule, "", text, desc)
-    except ig.IGError as e:
-        _log(db, account, "error", rule, "", text, f"Direct javob: {e}")
-
-    rule.hits += 1
-    db.commit()
-
-
-def handle_postback(db: Session, account: IGAccount, sender_id: str, postback: dict) -> None:
-    payload = postback.get("payload") or ""
-    if not payload.startswith(GATE_PREFIX):
-        log.info("postback: begona payload %r — o'tkazildi", payload[:40])
+def handle_postback(db: Session, account: IGAccount, contact: Contact, payload: str, title: str, mid: str) -> None:
+    if not payload.startswith(FLOW_PREFIX):
+        log.info("postback: begona payload %r", payload[:40])
         return
     try:
-        rule_id = int(payload[len(GATE_PREFIX):])
+        flow_id_s, node_id, btn_id = payload[len(FLOW_PREFIX):].split(":", 2)
+        flow_id = int(flow_id_s)
     except ValueError:
         return
-    rule = db.get(Rule, rule_id)
-    if not rule or rule.account_id != account.id or not rule.active:
-        log.info("postback: qoida #%s topilmadi yoki o'chirilgan", rule_id)
+    flow = db.get(Flow, flow_id)
+    if not flow or flow.account_id != account.id or not flow.active:
+        log.info("postback: ssenariy #%s topilmadi yoki o'chirilgan", flow_id)
         return
-    mid = postback.get("mid") or f"{sender_id}:{payload}:{utcnow().timestamp()}"
     if not mark_processed(db, f"p:{mid}"):
-        log.info("postback: takroriy (%s)", mid[:30])
         return
-    clicked = f"[{postback.get('title') or 'tugma'}]"
-    if _over_limit(db, account, rule, "", clicked):
+    # Tugma bosilsa — kutilayotgan savol bekor qilinadi
+    for s in db.scalars(select(FlowSession).where(FlowSession.contact_id == contact.id)):
+        db.delete(s)
+    db.commit()
+    ctx = make_ctx(db, account, contact, flow, incoming=f"[{title or 'button'}]")
+    bump(db, flow.id, node_id, f"clicked:{btn_id}")
+    ctx.log("click", title or "")
+    run_from(ctx, ctx.graph.next(node_id, f"btn:{btn_id}"))
+
+
+def ensure_profile(db: Session, account: IGAccount, contact: Contact) -> None:
+    if contact.profile_checked:
         return
-
-    token = decrypt(account.access_token_enc)
-    username = ""
+    contact.profile_checked = True
     try:
-        profile = ig.get_user_profile(token, sender_id)
-        username = profile.get("username") or ""
-        follows = bool(profile.get("is_user_follow_business"))
-    except ig.IGError as e:
-        # Tekshirib bo'lmasa — mijozni qiynamaymiz, havolani beramiz, lekin xatoni yozib qo'yamiz
-        _log(db, account, "error", rule, "", clicked, f"Obunani tekshirib bo'lmadi, havola baribir yuborildi: {e}")
-        follows = True
-
-    if follows:
-        msg, desc = reward_message(rule, username)
-        kind = "gate_pass"
-    else:
-        msg, desc = not_following_message(rule, account, username)
-        kind = "gate_fail"
-    try:
-        ig.send_dm(token, sender_id, msg)
-        _log(db, account, kind, rule, username, clicked, desc)
-    except ig.IGError as e:
-        _log(db, account, "error", rule, username, clicked, f"Direct javob: {e}")
+        profile = ig.get_user_profile(decrypt(account.access_token_enc), contact.igsid)
+        contact.username = (profile.get("username") or contact.username or "")[:120]
+        if profile.get("is_user_follow_business") is not None:
+            contact.follows = bool(profile.get("is_user_follow_business"))
+    except Exception as e:  # noqa: BLE001
+        log.info("profile @%s: %s", contact.igsid, e)
+    db.commit()
 
 
 def handle_messaging(db: Session, account: IGAccount, event: dict) -> None:
     sender_id = str((event.get("sender") or {}).get("id") or "")
     if not sender_id or sender_id == account.ig_user_id:
         return
-    if event.get("postback"):
-        handle_postback(db, account, sender_id, event["postback"])
-        return
     message = event.get("message") or {}
-    if not message or message.get("is_echo") or message.get("is_deleted"):
+    postback = event.get("postback")
+    if not postback and (not message or message.get("is_echo") or message.get("is_deleted")):
         return
-    # Quick reply tugmasi bosilsa ham shu yerga keladi (payload bilan)
+
+    contact = get_contact(db, account, sender_id)
+    touch_inbound(db, contact)
+
+    if postback:
+        mid = postback.get("mid") or f"{sender_id}:{event.get('timestamp')}"
+        handle_postback(db, account, contact, postback.get("payload") or "", postback.get("title") or "", mid)
+        return
+
+    mid = message.get("mid")
+    if not mid:
+        return
     qr = (message.get("quick_reply") or {}).get("payload")
-    if qr and qr.startswith(GATE_PREFIX):
-        handle_postback(db, account, sender_id, {"payload": qr, "mid": message.get("mid"), "title": message.get("text")})
+    if qr:
+        handle_postback(db, account, contact, qr, message.get("text") or "", mid)
         return
-    handle_text_message(db, account, sender_id, message)
+    ensure_profile(db, account, contact)
+
+    text = message.get("text") or ""
+    attachments = message.get("attachments") or []
+    if any(a.get("type") == "story_mention" for a in attachments):
+        kind = "story_mention"
+    elif (message.get("reply_to") or {}).get("story"):
+        kind = "story_reply"
+    else:
+        kind = "dm"
+
+    if kind == "dm":
+        session = db.scalar(select(FlowSession).where(FlowSession.contact_id == contact.id))
+        if session:
+            if session.expires_at > utcnow():
+                if mark_processed(db, f"m:{mid}"):
+                    handle_answer(db, account, contact, session, text)
+                return
+            db.delete(session)
+            db.commit()
+        if not text:
+            return
+
+    flow, trig = find_flow(db, account, kind, text)
+    if not flow or not mark_processed(db, f"m:{mid}"):
+        return
+    ctx = make_ctx(db, account, contact, flow, incoming=text or f"[{kind}]")
+    start_flow(ctx, trig)
 
 
 def process_payload(payload: dict) -> None:
@@ -302,16 +511,41 @@ def process_payload(payload: dict) -> None:
         db.close()
 
 
-# ---------- Fon vazifalari ----------
+# ---------------------------------------------------------------- fon vazifalari
+
+def run_due_jobs() -> int:
+    """Kutish bloklari: vaqti kelgan qadamlarni bajarish."""
+    db = SessionLocal()
+    done = 0
+    try:
+        jobs = db.scalars(select(ScheduledJob).where(ScheduledJob.run_at <= utcnow())
+                          .order_by(ScheduledJob.run_at).limit(100)).all()
+        for job in jobs:
+            flow, contact = db.get(Flow, job.flow_id), db.get(Contact, job.contact_id)
+            node_id = job.node_id
+            db.delete(job)
+            db.commit()
+            if not flow or not contact or not flow.active or not flow.account.active:
+                continue
+            try:
+                run_from(make_ctx(db, flow.account, contact, flow, incoming="[delay]"), node_id)
+                done += 1
+            except Exception:
+                db.rollback()
+                log.exception("scheduled job failed")
+        return done
+    finally:
+        db.close()
+
 
 def resubscribe_all() -> None:
-    """Yangi webhook maydonlari (masalan, messaging_postbacks) eski ulangan akkauntlarga ham yoqilsin."""
+    """Yangi webhook maydonlari eski ulangan akkauntlarga ham yoqilsin."""
     db = SessionLocal()
     try:
         for acc in db.scalars(select(IGAccount)).all():
             try:
                 ig.subscribe_webhooks(decrypt(acc.access_token_enc))
-                log.info("resubscribe @%s: ok (comments, messages, messaging_postbacks)", acc.username)
+                log.info("resubscribe @%s: ok", acc.username)
             except Exception as e:  # noqa: BLE001
                 log.warning("resubscribe @%s: %s", acc.username, e)
     finally:
@@ -323,8 +557,7 @@ def refresh_expiring_tokens() -> None:
     db = SessionLocal()
     try:
         soon = utcnow() + timedelta(days=10)
-        accounts = db.scalars(select(IGAccount).where(IGAccount.token_expires_at < soon)).all()
-        for acc in accounts:
+        for acc in db.scalars(select(IGAccount).where(IGAccount.token_expires_at < soon)).all():
             try:
                 token, expires_in = ig.refresh_token(decrypt(acc.access_token_enc))
                 acc.access_token_enc = encrypt(token)
@@ -332,9 +565,10 @@ def refresh_expiring_tokens() -> None:
                 db.commit()
             except Exception as e:  # noqa: BLE001
                 db.rollback()
-                _log(db, acc, "error", detail=f"Token yangilanmadi: {e}")
-        # Eski dedup yozuvlarini tozalash
+                db.add(EventLog(account_id=acc.id, kind="error", detail=f"token_refresh → {e}"[:1000]))
+                db.commit()
         db.query(ProcessedEvent).filter(ProcessedEvent.created_at < utcnow() - timedelta(days=14)).delete()
+        db.query(FlowSession).filter(FlowSession.expires_at < utcnow()).delete()
         db.commit()
     finally:
         db.close()

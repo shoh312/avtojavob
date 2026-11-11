@@ -7,7 +7,7 @@ load_dotenv()
 
 class Settings:
     APP_URL = os.getenv("APP_URL", "http://localhost:8000").rstrip("/")
-    APP_NAME = os.getenv("APP_NAME", "AvtoJavob")
+    APP_NAME = "ChatFlow"
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
     TOKEN_ENC_KEY = os.getenv("TOKEN_ENC_KEY", "")
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data.db")

@@ -1,63 +1,51 @@
-"""Meta'ga ulanmasdan to'liq oqimni tekshirish (Instagram chaqiruvlari soxtalashtirilgan)."""
+"""ChatFlow: API va ssenariy dvigatelini Meta'ga ulanmasdan tekshirish (Instagram chaqiruvlari soxta).
+
+PostgreSQL'da ishga tushirish:  TEST_DATABASE_URL=postgresql+psycopg://... pytest
+"""
 
 import hashlib
 import hmac
 import json
 import os
-import sqlite3
 import tempfile
+from datetime import timedelta
 
 _db = os.path.join(tempfile.mkdtemp(), "test.db")
-# TEST_DATABASE_URL=postgresql+psycopg://... bilan PostgreSQL'da ham ishga tushirish mumkin
 _TEST_DB = os.environ.get("TEST_DATABASE_URL") or f"sqlite:///{_db}"
-os.environ.update({
-    "DATABASE_URL": _TEST_DB,
-    "IG_APP_ID": "123",
-    "IG_APP_SECRET": "test-secret",
-    "WEBHOOK_VERIFY_TOKEN": "verify-me",
-    "SECRET_KEY": "test",
-})
-
-# Eski (v1) sxemadagi jadval — yangi ustunlar avtomatik qo'shilishini tekshirish uchun
-if _TEST_DB.startswith("sqlite"):
-    _con = sqlite3.connect(_db)
-    _con.execute("""CREATE TABLE rules (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL,
-    trigger VARCHAR(16) NOT NULL, keywords TEXT NOT NULL, match_mode VARCHAR(16) NOT NULL, media_id VARCHAR(64),
-    media_caption VARCHAR(255) NOT NULL, comment_replies TEXT NOT NULL, dm_text TEXT NOT NULL, active BOOLEAN NOT NULL,
-    hits INTEGER NOT NULL, created_at DATETIME NOT NULL)""")
-    _con.commit()
-    _con.close()
+os.environ.update({"DATABASE_URL": _TEST_DB, "IG_APP_ID": "123", "IG_APP_SECRET": "test-secret",
+                   "WEBHOOK_VERIFY_TOKEN": "verify-me", "SECRET_KEY": "test"})
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import instagram as ig  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
+from app.engine import run_due_jobs  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import EventLog, IGAccount, Rule  # noqa: E402
+from app.models import Contact, IGAccount, ScheduledJob, utcnow  # noqa: E402
 from app.security import encrypt  # noqa: E402
 
 IG_ID = "17841400000000001"
-# Haqiqiy Instagram mid'lari ~200 belgi bo'ladi
 LONG_MID = ("aWdfZAG1faXRlbToxOklHTWVzc2FnZAUlEOjE3ODQxNDAwMDAwMDAwMDE6MzQwMjgyMzY2ODQxNzEwMzAwOTQ5MTI4"
             "MTk2MzA0NDQxMjQ4NDU0OjMxOTkwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw")
+H = {"X-ChatFlow": "1"}
 calls: list[tuple] = []
-ACC: dict = {}
 profile = {"follows": False}
+S: dict = {}
 
 
 @pytest.fixture(scope="module")
 def client():
-    ig_fakes = {
+    fakes = {
         "reply_to_comment": lambda t, cid, text: calls.append(("comment", cid, text)) or {"id": "r1"},
         "private_reply": lambda t, cid, msg: calls.append(("private", cid, msg)) or {"message_id": "m1"},
         "send_dm": lambda t, rid, msg: calls.append(("dm", rid, msg)) or {"message_id": "m2"},
-        "list_media": lambda t, limit=30: [{"id": "M1", "caption": "Yangi kolleksiya", "timestamp": "2026-11-01T10:00:00"}],
+        "list_media": lambda t, limit=30: [{"id": "M1", "caption": "Yangi kolleksiya"}],
         "get_user_profile": lambda t, igsid: {"username": "mijoz", "is_user_follow_business": profile["follows"]},
         "subscribe_webhooks": lambda t: None,
     }
-    originals = {k: getattr(ig, k) for k in ig_fakes}
-    for k, v in ig_fakes.items():
+    originals = {k: getattr(ig, k) for k in fakes}
+    for k, v in fakes.items():
         setattr(ig, k, v)
     with TestClient(app) as c:
         yield c
@@ -65,161 +53,215 @@ def client():
         setattr(ig, k, v)
 
 
-def post_webhook(client, payload):
+def hook(client, payload):
     body = json.dumps(payload).encode()
     sig = "sha256=" + hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
-    return client.post("/webhook", content=body, headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"})
+    r = client.post("/webhook", content=body, headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"})
+    assert r.text == "EVENT_RECEIVED"
 
 
-def comment_payload(comment_id, text, from_id="999", media_id="M1"):
-    return {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "changes": [{
-        "field": "comments",
-        "value": {"id": comment_id, "text": text, "from": {"id": from_id, "username": "mijoz"},
-                  "media": {"id": media_id, "media_product_type": "FEED"}},
-    }]}]}
+def comment(cid, text, from_id="999", media_id="M1"):
+    return {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "changes": [{"field": "comments", "value": {
+        "id": cid, "text": text, "from": {"id": from_id, "username": "mijoz"}, "media": {"id": media_id}}}]}]}
 
 
-def postback_payload(mid, payload, title="Havolani olish", sender="555"):
+def messaging(event, sender="999"):
     return {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [
-        {"sender": {"id": sender}, "recipient": {"id": IG_ID}, "timestamp": 1,
-         "postback": {"mid": mid, "title": title, "payload": payload}},
-    ]}]}
+        {"sender": {"id": sender}, "recipient": {"id": IG_ID}, "timestamp": 1, **event}]}]}
 
 
-def buttons_of(msg):
+def text_msg(mid, text, **extra):
+    return messaging({"message": {"mid": mid, "text": text, **extra}})
+
+
+def postback(mid, payload):
+    return messaging({"postback": {"mid": mid, "title": "btn", "payload": payload}})
+
+
+def buttons(msg):
     return msg["attachment"]["payload"]["buttons"]
 
 
-def test_pages_and_auth(client):
-    assert client.get("/").status_code == 200
-    assert client.get("/privacy").status_code == 200
-    assert client.get("/dashboard", follow_redirects=False).headers["location"] == "/login"
-    r = client.post("/register", data={"name": "Ali", "email": "a@b.uz", "password": "12345678"})
-    assert r.status_code == 200 and "Salom, Ali" in r.text
+def text_of(msg):
+    return msg.get("text") or msg["attachment"]["payload"]["text"]
 
 
-def test_webhook_verify(client):
-    ok = client.get("/webhook", params={"hub.mode": "subscribe", "hub.verify_token": "verify-me", "hub.challenge": "42"})
-    assert ok.text == "42"
-    bad = client.get("/webhook", params={"hub.mode": "subscribe", "hub.verify_token": "x", "hub.challenge": "42"})
-    assert bad.status_code == 403
+def node(graph, ntype, nth=0):
+    return [n for n in graph["nodes"] if n["type"] == ntype][nth]
 
 
-def test_rule_and_comment_flow(client):
+# ------------------------------------------------------------------ auth va sahifalar
+
+def test_auth_and_pages(client):
+    assert client.get("/privacy?lang=tj").status_code == 200
+    assert "Политика" in client.get("/privacy?lang=ru").text
+    assert client.get("/api/me").status_code == 401
+    # CSRF: maxsus sarlavhasiz o'zgartiruvchi so'rov rad etiladi
+    assert client.post("/api/auth/register", json={"email": "a@b.tj", "password": "12345678"}).status_code == 403
+    r = client.post("/api/auth/register", json={"email": "a@b.tj", "password": "12345678", "name": "Ali",
+                                                 "lang": "uz"}, headers=H)
+    assert r.status_code == 200 and r.json()["user"]["lang"] == "uz"
+    assert client.post("/api/auth/register", json={"email": "a@b.tj", "password": "12345678"},
+                       headers=H).json()["error"] == "email_taken"
+    assert client.get("/api/me").json()["user"]["name"] == "Ali"
+
     with SessionLocal() as db:
-        acc = IGAccount(user_id=1, ig_user_id=IG_ID, username="dokon", access_token_enc=encrypt("tok"))
+        acc = IGAccount(user_id=r.json()["user"]["id"], ig_user_id=IG_ID, username="dokon",
+                        access_token_enc=encrypt("tok"))
         db.add(acc)
         db.commit()
-        ACC["id"] = acc.id
-    aid = ACC["id"]
+        S["acc"] = acc.id
+    assert client.get("/api/me").json()["accounts"][0]["username"] == "dokon"
+    assert client.get(f"/api/accounts/{S['acc']}/media").json()["items"][0]["id"] == "M1"
 
-    page = client.get(f"/accounts/{aid}/rules/new")
-    assert page.status_code == 200 and "Yangi kolleksiya" in page.text and "Obuna tekshiruvi" in page.text
 
-    r = client.post(f"/accounts/{ACC['id']}/rules/new", data={
-        "name": "Narx", "trigger": "comment", "keywords": "narx, price", "match_mode": "contains",
-        "media": "", "comment_replies": "Direct'ga yozdik {username}", "dm_text": "Narxi 100 000 so'm",
-    })
-    assert "Narx" in r.text
-    client.post(f"/accounts/{ACC['id']}/rules/new", data={
-        "name": "Salom", "trigger": "dm", "keywords": "salom", "match_mode": "contains", "dm_text": "Va alaykum assalom!",
-    })
+def test_templates_list(client):
+    items = client.get("/api/templates").json()["items"]
+    assert [t["key"] for t in items] == ["price", "gift", "lead", "story"]
+    assert items[0]["name"] == "Narx so'raganlar"  # foydalanuvchi tili: uz
 
-    assert client.post("/webhook", json=comment_payload("c0", "narx")).status_code == 403
+
+# ------------------------------------------------------------------ ssenariylar
+
+def create(client, template=None, name=None):
+    r = client.post("/api/flows", json={"account_id": S["acc"], "template": template, "name": name}, headers=H)
+    assert r.status_code == 200, r.text
+    return client.get(f"/api/flows/{r.json()['id']}").json()
+
+
+def activate(client, flow, graph=None):
+    r = client.put(f"/api/flows/{flow['id']}", json={"graph": graph or flow["graph"], "active": True}, headers=H)
+    assert r.json()["active"] is True, r.json()["errors"]
+
+
+def test_validation_blocks_activation(client):
+    flow = create(client)  # bo'sh: faqat trigger, kalit so'zsiz
+    r = client.put(f"/api/flows/{flow['id']}", json={"graph": flow["graph"], "active": True}, headers=H).json()
+    assert r["active"] is False and r["errors"][0]["code"] == "trigger_keywords"
+    client.delete(f"/api/flows/{flow['id']}", headers=H)
+
+
+def test_price_template(client):
+    flow = create(client, "price")
+    activate(client, flow)
+    calls.clear()
+    hook(client, comment("c1", "NARXI qancha?"))
+    assert calls[0][0] == "comment" and calls[0][2] in ("Direct'ga yozdik 📩", "Ma'lumot Direct'da ✅")
+    kind, cid, msg = calls[1]
+    assert (kind, cid) == ("private", "c1")
+    assert text_of(msg) == "Salom, @mijoz! 👋 Narxlar va katalog quyida:"
+    assert [b["type"] for b in buttons(msg)] == ["web_url", "web_url"]
 
     calls.clear()
-    assert post_webhook(client, comment_payload("c1", "NARXI qancha?")).text == "EVENT_RECEIVED"
-    assert ("comment", "c1", "Direct'ga yozdik @mijoz") in calls
-    assert ("private", "c1", {"text": "Narxi 100 000 so'm"}) in calls
-
-    calls.clear()
-    post_webhook(client, comment_payload("c1", "NARXI qancha?"))
-    post_webhook(client, comment_payload("c2", "zo'r post"))
-    post_webhook(client, comment_payload("c3", "narx", from_id=IG_ID))
+    hook(client, comment("c1", "narx"))          # takroriy
+    hook(client, comment("c2", "zo'r"))          # mos emas
+    hook(client, comment("c3", "narx", IG_ID))   # o'zimiz
     assert calls == []
-
-    post_webhook(client, {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [
-        {"sender": {"id": "555"}, "recipient": {"id": IG_ID}, "timestamp": 1, "message": {"mid": LONG_MID + "m", "text": "Salom!"}},
-        {"sender": {"id": IG_ID}, "recipient": {"id": "555"}, "timestamp": 1, "message": {"mid": "mid2", "text": "salom", "is_echo": True}},
-    ]}]})
-    assert calls == [("dm", "555", {"text": "Va alaykum assalom!"})]
-
-    with SessionLocal() as db:
-        assert db.query(Rule).filter_by(name="Narx").one().hits == 1
-        assert db.query(EventLog).count() == 3
+    stats = client.get(f"/api/flows/{flow['id']}/stats").json()
+    assert stats["runs"] == 1 and stats["nodes"][node(flow["graph"], "message")["id"]]["sent"] == 1
+    client.put(f"/api/flows/{flow['id']}", json={"active": False}, headers=H)
 
 
-def test_link_buttons(client):
-    r = client.post(f"/accounts/{ACC['id']}/rules/new", data={
-        "name": "Katalog", "trigger": "comment", "keywords": "katalog", "match_mode": "contains",
-        "dm_text": "Mana katalog 👇",
-        "btn_title": ["Katalog", "Telegram", ""], "btn_url": ["https://shop.uz", "https://t.me/shop", ""],
-    })
-    assert "🔗 2 ta tugma" in r.text
+def test_gift_follow_gate(client):
+    flow = create(client, "gift")
+    activate(client, flow)
+    g = flow["graph"]
+    first = node(g, "message", 0)
+    get_btn = first["data"]["buttons"][0]["id"]
 
     calls.clear()
-    post_webhook(client, comment_payload("c10", "katalog bormi"))
-    (_, cid, msg), = calls
-    assert cid == "c10"
-    assert msg["attachment"]["payload"]["text"] == "Mana katalog 👇"
-    assert buttons_of(msg) == [
-        {"type": "web_url", "title": "Katalog", "url": "https://shop.uz"},
-        {"type": "web_url", "title": "Telegram", "url": "https://t.me/shop"},
-    ]
+    hook(client, comment("c10", "SOVG’A kerak"))
+    _, _, msg = calls[-1]
+    payload = buttons(msg)[0]["payload"]
+    assert payload == f"F:{flow['id']}:{first['id']}:{get_btn}"
 
-    bad = client.post(f"/accounts/{ACC['id']}/rules/new", data={
-        "name": "X", "trigger": "comment", "keywords": "x", "match_mode": "contains", "dm_text": "x",
-        "btn_title": ["Nomi bor"], "btn_url": ["shop.uz"],
-    })
-    assert "https://" in bad.text
-
-
-def test_follow_gate(client):
-    r = client.post(f"/accounts/{ACC['id']}/rules/new", data={
-        "name": "Sovg'a", "trigger": "comment", "keywords": "sovg'a", "match_mode": "contains",
-        "dm_text": "Salom {username}! Sovg'ani olish uchun bosing", "follow_gate": "1",
-        "gate_button": "Sovg'ani olish", "reward_text": "Rahmat! Mana sovg'a 🎁",
-        "btn_title": ["Yuklab olish"], "btn_url": ["https://shop.uz/gift.pdf"],
-    })
-    assert "🔒 obuna tekshiruvi" in r.text
-    with SessionLocal() as db:
-        rule_id = db.query(Rule).filter_by(name="Sovg'a").one().id
-
-    # 1) izoh -> postback tugmali birinchi xabar
-    calls.clear()
-    post_webhook(client, comment_payload("c20", "SOVG’A kerak"))  # boshqa apostrof ham ishlaydi
-    (_, _, msg), = calls
-    assert msg["attachment"]["payload"]["text"] == "Salom @mijoz! Sovg'ani olish uchun bosing"
-    assert buttons_of(msg) == [{"type": "postback", "title": "Sovg'ani olish", "payload": f"G:{rule_id}"}]
-
-    # 2) obuna emas -> "obuna bo'ling" + profil + "obuna bo'ldim"
+    # obuna emas -> "obuna bo'ling" + "Obuna bo'ldim" tugmasi
     calls.clear()
     profile["follows"] = False
-    post_webhook(client, postback_payload(LONG_MID + "1", f"G:{rule_id}"))
+    hook(client, postback(LONG_MID + "1", payload))
     (kind, rid, msg), = calls
-    assert (kind, rid) == ("dm", "555")
-    btns = buttons_of(msg)
-    assert btns[0] == {"type": "web_url", "title": "Profilga o'tish", "url": "https://www.instagram.com/dokon/"}
-    assert btns[1]["type"] == "postback" and btns[1]["payload"] == f"G:{rule_id}"
+    assert (kind, rid) == ("dm", "999") and "obuna" in text_of(msg).lower()
+    again = buttons(msg)[0]["payload"]
 
-    # 3) obuna bo'ldi -> mukofot + havola
+    # obuna bo'ldi -> sovg'a havolasi
     calls.clear()
     profile["follows"] = True
-    post_webhook(client, postback_payload(LONG_MID + "2", f"G:{rule_id}", title="Obuna bo'ldim ✅"))
+    hook(client, postback(LONG_MID + "2", again))
     (_, _, msg), = calls
-    assert msg["attachment"]["payload"]["text"] == "Rahmat! Mana sovg'a 🎁"
-    assert buttons_of(msg) == [{"type": "web_url", "title": "Yuklab olish", "url": "https://shop.uz/gift.pdf"}]
+    assert buttons(msg)[0]["url"] == "https://example.com/gift.pdf"
 
-    # takroriy postback va begona payload e'tiborsiz
     calls.clear()
-    post_webhook(client, postback_payload(LONG_MID + "2", f"G:{rule_id}"))
-    post_webhook(client, postback_payload("pb3", "G:99999"))
-    post_webhook(client, postback_payload("pb4", "boshqa"))
+    hook(client, postback(LONG_MID + "2", again))     # takroriy
+    hook(client, postback(LONG_MID + "3", "F:99999:x:y"))  # begona
     assert calls == []
+    cond = node(g, "condition")["id"]
+    st = client.get(f"/api/flows/{flow['id']}/stats").json()["nodes"]
+    assert st[cond] == {"no": 1, "yes": 1} and st[first["id"]][f"clicked:{get_btn}"] == 1
+    client.put(f"/api/flows/{flow['id']}", json={"active": False}, headers=H)
 
-    logs = client.get("/logs").text
-    assert "Obuna ✅ havola berildi" in logs and "so‘raldi" in logs
 
-    edit = client.get(f"/rules/{rule_id}/edit").text
-    assert "https://shop.uz/gift.pdf" in edit and "Rahmat! Mana sovg" in edit
-    assert client.get("/dashboard").status_code == 200
+def test_lead_question_flow(client):
+    flow = create(client, "lead")
+    activate(client, flow)
+    calls.clear()
+    hook(client, text_msg(LONG_MID + "a", "Buyurtma bermoqchiman", ))
+    assert "telefon" in text_of(calls[-1][2]).lower()
+
+    calls.clear()
+    hook(client, text_msg(LONG_MID + "b", "bilmadim"))          # noto'g'ri -> xato matni
+    assert "to'g'ri raqam" in text_of(calls[-1][2])
+    calls.clear()
+    hook(client, text_msg(LONG_MID + "c", "+992 90 123 45 67"))  # to'g'ri -> teg + rahmat
+    assert "Rahmat" in text_of(calls[-1][2])
+
+    contacts = client.get(f"/api/contacts?account_id={S['acc']}").json()
+    c = contacts["items"][0]
+    assert c["fields"]["phone"] == "+992 90 123 45 67" and "lead" in c["tags"] and contacts["tags"] == ["lead"]
+    assert client.get(f"/api/contacts?account_id={S['acc']}&tag=lead").json()["total"] == 1
+    csv_text = client.get(f"/api/contacts/export.csv?account_id={S['acc']}").text
+    assert "phone" in csv_text and "+992 90 123 45 67" in csv_text
+    client.put(f"/api/flows/{flow['id']}", json={"active": False}, headers=H)
+
+
+def test_story_reply_and_delay(client):
+    flow = create(client, "story")
+    g = flow["graph"]
+    trig, msg = node(g, "trigger"), node(g, "message")
+    # trigger -> kutish(5 daqiqa) -> xabar
+    delay = {"id": "d1", "type": "delay", "position": {"x": 200, "y": 0}, "data": {"amount": 5, "unit": "minutes"}}
+    g["nodes"].append(delay)
+    g["edges"] = [{"id": "e1", "source": trig["id"], "sourceHandle": "out", "target": "d1"},
+                  {"id": "e2", "source": "d1", "sourceHandle": "out", "target": msg["id"]}]
+    activate(client, flow, g)
+
+    calls.clear()
+    hook(client, text_msg(LONG_MID + "s", "🔥", reply_to={"story": {"id": "st1", "url": "https://x"}}))
+    assert calls == []  # hali kutilmoqda
+    with SessionLocal() as db:
+        job = db.query(ScheduledJob).one()
+        job.run_at = utcnow() - timedelta(seconds=1)
+        db.commit()
+    assert run_due_jobs() == 1
+    assert "Javobingiz uchun rahmat" in text_of(calls[-1][2])
+
+
+def test_24h_window(client):
+    with SessionLocal() as db:
+        c = db.query(Contact).filter_by(igsid="999").one()
+        c.last_inbound_at = utcnow() - timedelta(hours=25)
+        db.commit()
+        assert not c.can_message()
+
+
+def test_activity_and_misc(client):
+    items = client.get(f"/api/activity?account_id={S['acc']}").json()["items"]
+    kinds = {i["kind"] for i in items}
+    assert {"private_reply", "dm_reply", "comment_reply", "click", "answer"} <= kinds
+    st = client.get(f"/api/stats?account_id={S['acc']}").json()
+    assert st["contacts"] == 1 and st["flows_total"] == 4
+    flows = client.get(f"/api/flows?account_id={S['acc']}").json()["items"]
+    dup = client.post(f"/api/flows/{flows[0]['id']}/duplicate", headers=H).json()
+    assert dup["active"] is False and dup["name"].endswith("(2)")
+    assert client.get("/api/flows/999999").status_code == 404
+    # SPA: noma'lum yo'l index.html ga (build bo'lmasa 503)
+    assert client.get("/app/flows").status_code in (200, 503)
