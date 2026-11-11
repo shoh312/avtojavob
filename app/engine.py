@@ -254,6 +254,8 @@ def run_from(ctx: Ctx, node_id: str | None) -> None:
             if not send(ctx, message, desc):
                 return
             bump(db, ctx.flow.id, node_id, "sent")
+            if any(b.get("kind") != "url" for b in d.get("buttons") or []):
+                return  # tugmali xabar: ssenariy tugma bosilganda davom etadi
             node_id = g.next(node_id)
         elif ntype == "question":
             if not send(ctx, ig.build_message(fill(d.get("text", ""), ctx.contact)), fill(d.get("text", ""), ctx.contact)):

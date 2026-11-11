@@ -98,9 +98,10 @@ export const MessageNode = memo(({ id, data, selected }: NodeProps) => {
   const d = data as any
   const buttons: any[] = d.buttons || []
   const s = stats[id] || {}
+  const waits = buttons.some(b => b.kind !== 'url')
   return (
     <Shell id={id} type="message" selected={!!selected} stat={<Stat value={s.sent} label={t('ed.stats.sent')} />}
-      footer={<OutRow id="out">{t('node.next')}</OutRow>}>
+      footer={waits ? undefined : <OutRow id="out">{t('node.next')}</OutRow>}>
       <Preview text={d.text} empty={t('node.empty_text')} />
       {buttons.length > 0 && (
         <div className="-mx-3.5 mt-2 flex flex-col gap-1">

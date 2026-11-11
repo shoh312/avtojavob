@@ -155,7 +155,8 @@ function Editor({ flow }: { flow: FlowFull }) {
   useEffect(() => {
     const valid = new Set<string>()
     for (const n of nodes) {
-      valid.add(`${n.id}|out`)
+      const waits = n.type === 'message' && ((n.data as any).buttons || []).some((b: any) => b.kind !== 'url')
+      if (!waits) valid.add(`${n.id}|out`)
       if (n.type === 'condition') { valid.add(`${n.id}|yes`); valid.add(`${n.id}|no`) }
       for (const b of ((n.data as any).buttons || [])) if (b.kind !== 'url') valid.add(`${n.id}|btn:${b.id}`)
     }

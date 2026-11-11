@@ -44,6 +44,9 @@ def validate_graph(graph: dict) -> list[dict]:
 
     ids = set()
     triggers = 0
+    handles: dict[str, set] = {}
+    for e in edges:
+        handles.setdefault(e.get("source"), set()).add(e.get("sourceHandle") or "out")
     for n in nodes:
         nid, ntype, d = n.get("id"), n.get("type"), n.get("data") or {}
         if not nid or ntype not in NODE_TYPES:
@@ -78,6 +81,8 @@ def validate_graph(graph: dict) -> list[dict]:
                     err("button_title")
                 if b.get("kind") == "url" and not str(b.get("url") or "").startswith(("https://", "http://")):
                     err("button_url")
+                if b.get("kind") != "url" and f"btn:{b.get('id')}" not in handles.get(nid, set()):
+                    err("button_unconnected")
         elif ntype == "question":
             if not (d.get("text") or "").strip():
                 err("question_text")

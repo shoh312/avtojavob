@@ -265,3 +265,18 @@ def test_activity_and_misc(client):
     assert client.get("/api/flows/999999").status_code == 404
     # SPA: noma'lum yo'l index.html ga (build bo'lmasa 503)
     assert client.get("/app/flows").status_code in (200, 503)
+
+
+def test_button_must_be_connected(client):
+    """Foydalanuvchi holati: tugma ulanmagan, 'Далее' esa shartga ulangan."""
+    flow = create(client, "gift")
+    g = flow["graph"]
+    first = node(g, "message", 0)
+    cond = node(g, "condition")
+    btn = f"btn:{first['data']['buttons'][0]['id']}"
+    g["edges"] = [e for e in g["edges"] if e["sourceHandle"] != btn]
+    g["edges"].append({"id": "x1", "source": first["id"], "sourceHandle": "out", "target": cond["id"]})
+    r = client.put(f"/api/flows/{flow['id']}", json={"graph": g, "active": True}, headers=H).json()
+    assert r["active"] is False
+    assert {"node": first["id"], "code": "button_unconnected"} in r["errors"]
+    client.delete(f"/api/flows/{flow['id']}", headers=H)
