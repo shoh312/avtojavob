@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
@@ -10,6 +11,10 @@ def utcnow() -> datetime:
     # SQLite bilan muammo bo'lmasligi uchun naive UTC saqlaymiz
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
+
+DEFAULT_GATE_BUTTON = "Havolani olish"
+DEFAULT_FOLLOW_BUTTON = "Obuna bo'ldim ✅"
+DEFAULT_NOT_FOLLOWING = "Havolani olish uchun avval sahifamizga obuna bo'ling, keyin «Obuna bo'ldim» tugmasini bosing 🙏"
 
 TRIGGERS = {
     "comment": "Izoh (comment)",
@@ -74,11 +79,31 @@ class Rule(Base):
     # Har bir qator — alohida variant (tasodifiy tanlanadi, spamga o'xshamasligi uchun)
     comment_replies: Mapped[str] = mapped_column(Text, default="")
     dm_text: Mapped[str] = mapped_column(Text, default="")
+    # Havola tugmalari: [{"title": "...", "url": "https://..."}] (maks. 3)
+    buttons_json: Mapped[str] = mapped_column(Text, default="[]")
+    # Obuna tekshiruvi
+    follow_gate: Mapped[bool] = mapped_column(Boolean, default=False)
+    gate_button: Mapped[str] = mapped_column(String(40), default=DEFAULT_GATE_BUTTON)
+    reward_text: Mapped[str] = mapped_column(Text, default="")
+    not_following_text: Mapped[str] = mapped_column(Text, default=DEFAULT_NOT_FOLLOWING)
+    follow_button: Mapped[str] = mapped_column(String(40), default=DEFAULT_FOLLOW_BUTTON)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     hits: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     account: Mapped[IGAccount] = relationship(back_populates="rules")
+
+    @property
+    def buttons(self) -> list[dict]:
+        try:
+            data = json.loads(self.buttons_json or "[]")
+        except ValueError:
+            return []
+        return [b for b in data if isinstance(b, dict) and b.get("title") and b.get("url")][:3]
+
+    @buttons.setter
+    def buttons(self, value: list[dict]) -> None:
+        self.buttons_json = json.dumps(value[:3], ensure_ascii=False)
 
     @property
     def keyword_list(self) -> list[str]:
@@ -99,7 +124,7 @@ class ProcessedEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
-SEND_KINDS = ("comment_reply", "private_reply", "dm_reply")
+SEND_KINDS = ("comment_reply", "private_reply", "dm_reply", "gate_pass", "gate_fail")
 
 
 class EventLog(Base):

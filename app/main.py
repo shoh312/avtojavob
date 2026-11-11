@@ -16,8 +16,9 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import instagram as ig
 from .config import settings
 from .db import get_db, init_db
-from .engine import process_payload, refresh_expiring_tokens
-from .models import MATCH_MODES, SEND_KINDS, TRIGGERS, EventLog, IGAccount, Rule, User, utcnow
+from .engine import process_payload, refresh_expiring_tokens, resubscribe_all
+from .models import (DEFAULT_FOLLOW_BUTTON, DEFAULT_GATE_BUTTON, DEFAULT_NOT_FOLLOWING, MATCH_MODES, SEND_KINDS,
+                     TRIGGERS, EventLog, IGAccount, Rule, User, utcnow)
 from .security import (decrypt, encrypt, hash_password, parse_signed_request,
                        verify_password, verify_webhook_signature)
 
@@ -26,6 +27,10 @@ log = logging.getLogger("app")
 
 
 async def _refresh_loop():
+    try:
+        await asyncio.to_thread(resubscribe_all)
+    except Exception:
+        log.exception("resubscribe")
     while True:
         try:
             await asyncio.to_thread(refresh_expiring_tokens)
@@ -180,7 +185,7 @@ def dashboard(request: Request, user: User = Depends(require_user), db: Session 
         sent_24h = db.scalar(select(func.count(EventLog.id)).where(
             EventLog.account_id.in_(account_ids), EventLog.kind.in_(SEND_KINDS), EventLog.created_at >= since
         )) or 0
-    return render(request, "dashboard.html", user=user, sent_24h=sent_24h, triggers=TRIGGERS, modes=MATCH_MODES)
+    return render(request, "dashboard.html", user=user, sent_24h=sent_24h, triggers=TRIGGERS, modes=MATCH_MODES, defaults=RULE_DEFAULTS)
 
 
 # ---------- Instagram ulash ----------
@@ -257,6 +262,9 @@ def account_disconnect(account_id: int, request: Request, user: User = Depends(r
 
 # ---------- Qoidalar ----------
 
+RULE_DEFAULTS = {"gate_button": DEFAULT_GATE_BUTTON, "follow_button": DEFAULT_FOLLOW_BUTTON,
+                 "not_following_text": DEFAULT_NOT_FOLLOWING}
+
 def _media_for(acc: IGAccount) -> list[dict]:
     try:
         return ig.list_media(decrypt(acc.access_token_enc))
@@ -264,29 +272,77 @@ def _media_for(acc: IGAccount) -> list[dict]:
         return []
 
 
-def _apply_form(rule: Rule, name: str, trigger: str, keywords: str, match_mode: str, media: str,
-                comment_replies: str, dm_text: str) -> str | None:
-    if trigger not in TRIGGERS or match_mode not in MATCH_MODES:
+class RuleForm:
+    """Qoida formasi maydonlari (yaratish va tahrirlash uchun umumiy)."""
+
+    def __init__(self, name: str = Form(""), trigger: str = Form("comment"), keywords: str = Form(""),
+                 match_mode: str = Form("contains"), media: str = Form(""), comment_replies: str = Form(""),
+                 dm_text: str = Form(""), btn_title: list[str] = Form([]), btn_url: list[str] = Form([]),
+                 follow_gate: str = Form(""), gate_button: str = Form(""), reward_text: str = Form(""),
+                 not_following_text: str = Form(""), follow_button: str = Form("")):
+        self.name, self.trigger, self.keywords, self.match_mode = name, trigger, keywords, match_mode
+        self.media, self.comment_replies, self.dm_text = media, comment_replies, dm_text
+        self.btn_title, self.btn_url = btn_title, btn_url
+        self.follow_gate = follow_gate in ("1", "on", "true")
+        self.gate_button, self.reward_text = gate_button.strip(), reward_text.strip()
+        self.not_following_text, self.follow_button = not_following_text.strip(), follow_button.strip()
+
+
+def _apply_form(rule: Rule, f: RuleForm) -> str | None:
+    if f.trigger not in TRIGGERS or f.match_mode not in MATCH_MODES:
         return "Noto'g'ri qiymat."
-    keywords = ", ".join(k.strip() for k in keywords.split(",") if k.strip())
-    if match_mode != "any" and not keywords:
+    keywords = ", ".join(k.strip() for k in f.keywords.split(",") if k.strip())
+    if f.match_mode != "any" and not keywords:
         return "Kamida bitta kalit so'z kiriting (yoki 'Har qanday matn' rejimini tanlang)."
-    if trigger == "comment" and not comment_replies.strip() and not dm_text.strip():
+    if f.trigger == "comment" and not f.comment_replies.strip() and not f.dm_text.strip():
         return "Izoh qoidasi uchun izohga javob yoki Direct matnidan kamida bittasi kerak."
-    if trigger == "dm" and not dm_text.strip():
+    if f.trigger == "dm" and not f.dm_text.strip():
         return "Direct qoidasi uchun javob matni kerak."
-    if len(dm_text) > 1000 or any(len(line) > 1000 for line in comment_replies.splitlines()):
+    if len(f.dm_text) > 1000 or any(len(line) > 1000 for line in f.comment_replies.splitlines()):
         return "Matn juda uzun (maks. 1000 belgi)."
 
-    media_id, caption = (media.split("::", 1) + [""])[:2] if media else (None, "")
-    rule.name = name.strip() or "Qoida"
-    rule.trigger = trigger
+    buttons = []
+    for title, url in zip(f.btn_title, f.btn_url):
+        title, url = title.strip(), url.strip()
+        if not title and not url:
+            continue
+        if not title or not url:
+            return "Har bir tugmaga ham nom, ham havola yozing."
+        if len(title) > 20:
+            return f"Tugma nomi 20 belgidan oshmasin: «{title}»."
+        if not url.startswith(("https://", "http://")):
+            return f"Havola https:// bilan boshlanishi kerak: {url}"
+        buttons.append({"title": title, "url": url})
+    if len(buttons) > 3:
+        return "Ko'pi bilan 3 ta tugma."
+
+    if f.follow_gate:
+        if not f.dm_text.strip():
+            return "Obuna tekshiruvi uchun Direct xabar matni kerak."
+        if not buttons and not f.reward_text:
+            return "Obuna tekshiruvidan keyin nima yuborilsin? Havola tugmasi yoki mukofot matnini kiriting."
+        for label, value in (("Tugma", f.gate_button), ("Tugma", f.follow_button)):
+            if len(value) > 20:
+                return f"{label} nomi 20 belgidan oshmasin: «{value}»."
+    if (buttons or f.follow_gate) and (len(f.dm_text) > 640 or len(f.reward_text) > 640
+                                        or len(f.not_following_text) > 640):
+        return "Tugmali xabar matni 640 belgidan oshmasin."
+
+    media_id, caption = (f.media.split("::", 1) + [""])[:2] if f.media else (None, "")
+    rule.name = f.name.strip() or "Qoida"
+    rule.trigger = f.trigger
     rule.keywords = keywords
-    rule.match_mode = match_mode
-    rule.media_id = (media_id or None) if trigger == "comment" else None
+    rule.match_mode = f.match_mode
+    rule.media_id = (media_id or None) if f.trigger == "comment" else None
     rule.media_caption = caption[:250] if rule.media_id else ""
-    rule.comment_replies = comment_replies.strip() if trigger == "comment" else ""
-    rule.dm_text = dm_text.strip()
+    rule.comment_replies = f.comment_replies.strip() if f.trigger == "comment" else ""
+    rule.dm_text = f.dm_text.strip()
+    rule.buttons = buttons
+    rule.follow_gate = f.follow_gate
+    rule.gate_button = f.gate_button or DEFAULT_GATE_BUTTON
+    rule.reward_text = f.reward_text
+    rule.not_following_text = f.not_following_text or DEFAULT_NOT_FOLLOWING
+    rule.follow_button = f.follow_button or DEFAULT_FOLLOW_BUTTON
     return None
 
 
@@ -295,21 +351,19 @@ def rule_new_page(account_id: int, request: Request, user: User = Depends(requir
                   db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
     return render(request, "rule_form.html", user=user, account=acc, rule=None, media=_media_for(acc),
-                  triggers=TRIGGERS, modes=MATCH_MODES)
+                  triggers=TRIGGERS, modes=MATCH_MODES, defaults=RULE_DEFAULTS)
 
 
 @app.post("/accounts/{account_id}/rules/new")
-def rule_create(account_id: int, request: Request, name: str = Form(""), trigger: str = Form("comment"),
-                keywords: str = Form(""), match_mode: str = Form("contains"), media: str = Form(""),
-                comment_replies: str = Form(""), dm_text: str = Form(""),
+def rule_create(account_id: int, request: Request, form: RuleForm = Depends(),
                 user: User = Depends(require_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
     rule = Rule(account_id=acc.id, name="")
-    err = _apply_form(rule, name, trigger, keywords, match_mode, media, comment_replies, dm_text)
+    err = _apply_form(rule, form)
     if err:
         flash(request, err, "error")
         return render(request, "rule_form.html", user=user, account=acc, rule=rule, media=_media_for(acc),
-                      triggers=TRIGGERS, modes=MATCH_MODES)
+                      triggers=TRIGGERS, modes=MATCH_MODES, defaults=RULE_DEFAULTS)
     db.add(rule)
     db.commit()
     flash(request, f"«{rule.name}» qoidasi yaratildi.")
@@ -321,16 +375,14 @@ def rule_edit_page(rule_id: int, request: Request, user: User = Depends(require_
                    db: Session = Depends(get_db)):
     rule = owned_rule(db, user, rule_id)
     return render(request, "rule_form.html", user=user, account=rule.account, rule=rule,
-                  media=_media_for(rule.account), triggers=TRIGGERS, modes=MATCH_MODES)
+                  media=_media_for(rule.account), triggers=TRIGGERS, modes=MATCH_MODES, defaults=RULE_DEFAULTS)
 
 
 @app.post("/rules/{rule_id}/edit")
-def rule_update(rule_id: int, request: Request, name: str = Form(""), trigger: str = Form("comment"),
-                keywords: str = Form(""), match_mode: str = Form("contains"), media: str = Form(""),
-                comment_replies: str = Form(""), dm_text: str = Form(""),
+def rule_update(rule_id: int, request: Request, form: RuleForm = Depends(),
                 user: User = Depends(require_user), db: Session = Depends(get_db)):
     rule = owned_rule(db, user, rule_id)
-    err = _apply_form(rule, name, trigger, keywords, match_mode, media, comment_replies, dm_text)
+    err = _apply_form(rule, form)
     if err:
         db.rollback()
         flash(request, err, "error")

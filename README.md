@@ -3,7 +3,9 @@
 Kalit so'z bo'yicha:
 - postga yozilgan **izohga ochiq javob** beradi,
 - izoh egasiga **Direct'da shaxsiy xabar** (Private Reply) yuboradi,
-- **Direct'ga kelgan xabarga** avtomatik javob qaytaradi.
+- **Direct'ga kelgan xabarga** avtomatik javob qaytaradi,
+- xabarga **havola tugmalari** (3 tagacha) qo'shadi,
+- **obuna tekshiruvi**: havolani faqat sahifaga obuna bo'lganlarga beradi.
 
 Ko'p foydalanuvchili (SaaS): har kim ro'yxatdan o'tib, o'z Instagram akkauntini ulaydi.
 

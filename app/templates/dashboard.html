@@ -75,6 +75,8 @@
             {% for k in r.keyword_list %}<span class="text-xs px-2 py-1 rounded-md bg-slate-100 font-mono">{{ k }}</span>{% endfor %}
             {% if r.match_mode == 'exact' %}<span class="text-xs text-slate-400 self-center">(aynan)</span>{% endif %}
           {% endif %}
+          {% if r.follow_gate %}<span class="text-xs px-2 py-1 rounded-md bg-emerald-50 text-emerald-700">🔒 obuna tekshiruvi</span>{% endif %}
+          {% if r.buttons %}<span class="text-xs px-2 py-1 rounded-md bg-sky-50 text-sky-700">🔗 {{ r.buttons|length }} ta tugma</span>{% endif %}
         </div>
       </div>
       <div class="text-sm text-slate-500 md:w-28">Ishladi: <b class="text-slate-800">{{ r.hits }}</b></div>

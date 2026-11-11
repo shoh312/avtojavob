@@ -97,7 +97,7 @@ def get_me(token: str) -> dict:
 
 def subscribe_webhooks(token: str) -> None:
     _json(_client.post(_graph("me/subscribed_apps"), params={
-        "subscribed_fields": "comments,messages",
+        "subscribed_fields": "comments,messages,messaging_postbacks",
         "access_token": token,
     }))
 
@@ -120,16 +120,43 @@ def reply_to_comment(token: str, comment_id: str, text: str) -> dict:
     }))
 
 
-def private_reply(token: str, comment_id: str, text: str) -> dict:
+def url_button(title: str, url: str) -> dict:
+    return {"type": "web_url", "title": title[:20], "url": url}
+
+
+def postback_button(title: str, payload: str) -> dict:
+    return {"type": "postback", "title": title[:20], "payload": payload}
+
+
+def build_message(text: str, buttons: list[dict] | None = None) -> dict:
+    """Matn + (ixtiyoriy) 3 tagacha tugma — Instagram 'button template'."""
+    if not buttons:
+        return {"text": text}
+    return {"attachment": {"type": "template", "payload": {
+        "template_type": "button",
+        "text": text[:640],
+        "buttons": buttons[:3],
+    }}}
+
+
+def private_reply(token: str, comment_id: str, message: dict) -> dict:
     """Izoh yozgan odamga Direct'ga xabar (har bir izohga 1 marta, 7 kun ichida)."""
     return _json(_client.post(_graph("me/messages"), params={"access_token": token}, json={
         "recipient": {"comment_id": comment_id},
-        "message": {"text": text},
+        "message": message,
     }))
 
 
-def send_dm(token: str, recipient_id: str, text: str) -> dict:
+def send_dm(token: str, recipient_id: str, message: dict) -> dict:
     return _json(_client.post(_graph("me/messages"), params={"access_token": token}, json={
         "recipient": {"id": recipient_id},
-        "message": {"text": text},
+        "message": message,
+    }))
+
+
+def get_user_profile(token: str, igsid: str) -> dict:
+    """Xabar yozgan foydalanuvchi haqida: username va bizga obuna bo'lganmi."""
+    return _json(_client.get(_graph(igsid), params={
+        "fields": "username,is_user_follow_business",
+        "access_token": token,
     }))

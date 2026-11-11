@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
 import tempfile
 
 _db = os.path.join(tempfile.mkdtemp(), "test.db")
@@ -14,6 +15,15 @@ os.environ.update({
     "WEBHOOK_VERIFY_TOKEN": "verify-me",
     "SECRET_KEY": "test",
 })
+
+# Eski (v1) sxemadagi jadval — yangi ustunlar avtomatik qo'shilishini tekshirish uchun
+_con = sqlite3.connect(_db)
+_con.execute("""CREATE TABLE rules (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL,
+    trigger VARCHAR(16) NOT NULL, keywords TEXT NOT NULL, match_mode VARCHAR(16) NOT NULL, media_id VARCHAR(64),
+    media_caption VARCHAR(255) NOT NULL, comment_replies TEXT NOT NULL, dm_text TEXT NOT NULL, active BOOLEAN NOT NULL,
+    hits INTEGER NOT NULL, created_at DATETIME NOT NULL)""")
+_con.commit()
+_con.close()
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -26,15 +36,18 @@ from app.security import encrypt  # noqa: E402
 
 IG_ID = "17841400000000001"
 calls: list[tuple] = []
+profile = {"follows": False}
 
 
 @pytest.fixture(scope="module")
 def client():
     ig_fakes = {
         "reply_to_comment": lambda t, cid, text: calls.append(("comment", cid, text)) or {"id": "r1"},
-        "private_reply": lambda t, cid, text: calls.append(("private", cid, text)) or {"message_id": "m1"},
-        "send_dm": lambda t, rid, text: calls.append(("dm", rid, text)) or {"message_id": "m2"},
+        "private_reply": lambda t, cid, msg: calls.append(("private", cid, msg)) or {"message_id": "m1"},
+        "send_dm": lambda t, rid, msg: calls.append(("dm", rid, msg)) or {"message_id": "m2"},
         "list_media": lambda t, limit=30: [{"id": "M1", "caption": "Yangi kolleksiya", "timestamp": "2026-11-01T10:00:00"}],
+        "get_user_profile": lambda t, igsid: {"username": "mijoz", "is_user_follow_business": profile["follows"]},
+        "subscribe_webhooks": lambda t: None,
     }
     originals = {k: getattr(ig, k) for k in ig_fakes}
     for k, v in ig_fakes.items():
@@ -59,6 +72,17 @@ def comment_payload(comment_id, text, from_id="999", media_id="M1"):
     }]}]}
 
 
+def postback_payload(mid, payload, title="Havolani olish", sender="555"):
+    return {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [
+        {"sender": {"id": sender}, "recipient": {"id": IG_ID}, "timestamp": 1,
+         "postback": {"mid": mid, "title": title, "payload": payload}},
+    ]}]}
+
+
+def buttons_of(msg):
+    return msg["attachment"]["payload"]["buttons"]
+
+
 def test_pages_and_auth(client):
     assert client.get("/").status_code == 200
     assert client.get("/privacy").status_code == 200
@@ -75,54 +99,118 @@ def test_webhook_verify(client):
 
 
 def test_rule_and_comment_flow(client):
-    # Akkauntni OAuth'siz to'g'ridan-to'g'ri bazaga qo'shamiz
     with SessionLocal() as db:
         acc = IGAccount(user_id=1, ig_user_id=IG_ID, username="dokon", access_token_enc=encrypt("tok"))
         db.add(acc)
         db.commit()
-        acc_id = acc.id
 
-    page = client.get(f"/accounts/{acc_id}/rules/new")
-    assert page.status_code == 200 and "Yangi kolleksiya" in page.text
+    page = client.get("/accounts/1/rules/new")
+    assert page.status_code == 200 and "Yangi kolleksiya" in page.text and "Obuna tekshiruvi" in page.text
 
-    r = client.post(f"/accounts/{acc_id}/rules/new", data={
+    r = client.post("/accounts/1/rules/new", data={
         "name": "Narx", "trigger": "comment", "keywords": "narx, price", "match_mode": "contains",
         "media": "", "comment_replies": "Direct'ga yozdik {username}", "dm_text": "Narxi 100 000 so'm",
     })
     assert "Narx" in r.text
-    client.post(f"/accounts/{acc_id}/rules/new", data={
+    client.post("/accounts/1/rules/new", data={
         "name": "Salom", "trigger": "dm", "keywords": "salom", "match_mode": "contains", "dm_text": "Va alaykum assalom!",
     })
 
-    # Imzosiz so'rov rad etiladi
     assert client.post("/webhook", json=comment_payload("c0", "narx")).status_code == 403
 
     calls.clear()
     assert post_webhook(client, comment_payload("c1", "NARXI qancha?")).text == "EVENT_RECEIVED"
     assert ("comment", "c1", "Direct'ga yozdik @mijoz") in calls
-    assert ("private", "c1", "Narxi 100 000 so'm") in calls
+    assert ("private", "c1", {"text": "Narxi 100 000 so'm"}) in calls
 
-    # Takroriy webhook — qayta javob yo'q
     calls.clear()
     post_webhook(client, comment_payload("c1", "NARXI qancha?"))
-    assert calls == []
-
-    # Mos kelmaydigan izoh va o'zimizning izoh
     post_webhook(client, comment_payload("c2", "zo'r post"))
     post_webhook(client, comment_payload("c3", "narx", from_id=IG_ID))
     assert calls == []
 
-    # Direct xabar
     post_webhook(client, {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [
         {"sender": {"id": "555"}, "recipient": {"id": IG_ID}, "timestamp": 1, "message": {"mid": "mid1", "text": "Salom!"}},
         {"sender": {"id": IG_ID}, "recipient": {"id": "555"}, "timestamp": 1, "message": {"mid": "mid2", "text": "salom", "is_echo": True}},
     ]}]})
-    assert calls == [("dm", "555", "Va alaykum assalom!")]
+    assert calls == [("dm", "555", {"text": "Va alaykum assalom!"})]
 
     with SessionLocal() as db:
         assert db.query(Rule).filter_by(name="Narx").one().hits == 1
         assert db.query(EventLog).count() == 3
 
-    logs = client.get("/logs")
-    assert "Izohga javob" in logs.text and "@mijoz" in logs.text
+
+def test_link_buttons(client):
+    r = client.post("/accounts/1/rules/new", data={
+        "name": "Katalog", "trigger": "comment", "keywords": "katalog", "match_mode": "contains",
+        "dm_text": "Mana katalog 👇",
+        "btn_title": ["Katalog", "Telegram", ""], "btn_url": ["https://shop.uz", "https://t.me/shop", ""],
+    })
+    assert "🔗 2 ta tugma" in r.text
+
+    calls.clear()
+    post_webhook(client, comment_payload("c10", "katalog bormi"))
+    (_, cid, msg), = calls
+    assert cid == "c10"
+    assert msg["attachment"]["payload"]["text"] == "Mana katalog 👇"
+    assert buttons_of(msg) == [
+        {"type": "web_url", "title": "Katalog", "url": "https://shop.uz"},
+        {"type": "web_url", "title": "Telegram", "url": "https://t.me/shop"},
+    ]
+
+    bad = client.post("/accounts/1/rules/new", data={
+        "name": "X", "trigger": "comment", "keywords": "x", "match_mode": "contains", "dm_text": "x",
+        "btn_title": ["Nomi bor"], "btn_url": ["shop.uz"],
+    })
+    assert "https://" in bad.text
+
+
+def test_follow_gate(client):
+    r = client.post("/accounts/1/rules/new", data={
+        "name": "Sovg'a", "trigger": "comment", "keywords": "sovg'a", "match_mode": "contains",
+        "dm_text": "Salom {username}! Sovg'ani olish uchun bosing", "follow_gate": "1",
+        "gate_button": "Sovg'ani olish", "reward_text": "Rahmat! Mana sovg'a 🎁",
+        "btn_title": ["Yuklab olish"], "btn_url": ["https://shop.uz/gift.pdf"],
+    })
+    assert "🔒 obuna tekshiruvi" in r.text
+    with SessionLocal() as db:
+        rule_id = db.query(Rule).filter_by(name="Sovg'a").one().id
+
+    # 1) izoh -> postback tugmali birinchi xabar
+    calls.clear()
+    post_webhook(client, comment_payload("c20", "SOVG’A kerak"))  # boshqa apostrof ham ishlaydi
+    (_, _, msg), = calls
+    assert msg["attachment"]["payload"]["text"] == "Salom @mijoz! Sovg'ani olish uchun bosing"
+    assert buttons_of(msg) == [{"type": "postback", "title": "Sovg'ani olish", "payload": f"G:{rule_id}"}]
+
+    # 2) obuna emas -> "obuna bo'ling" + profil + "obuna bo'ldim"
+    calls.clear()
+    profile["follows"] = False
+    post_webhook(client, postback_payload("pb1", f"G:{rule_id}"))
+    (kind, rid, msg), = calls
+    assert (kind, rid) == ("dm", "555")
+    btns = buttons_of(msg)
+    assert btns[0] == {"type": "web_url", "title": "Profilga o'tish", "url": "https://www.instagram.com/dokon/"}
+    assert btns[1]["type"] == "postback" and btns[1]["payload"] == f"G:{rule_id}"
+
+    # 3) obuna bo'ldi -> mukofot + havola
+    calls.clear()
+    profile["follows"] = True
+    post_webhook(client, postback_payload("pb2", f"G:{rule_id}", title="Obuna bo'ldim ✅"))
+    (_, _, msg), = calls
+    assert msg["attachment"]["payload"]["text"] == "Rahmat! Mana sovg'a 🎁"
+    assert buttons_of(msg) == [{"type": "web_url", "title": "Yuklab olish", "url": "https://shop.uz/gift.pdf"}]
+
+    # takroriy postback va begona payload e'tiborsiz
+    calls.clear()
+    post_webhook(client, postback_payload("pb2", f"G:{rule_id}"))
+    post_webhook(client, postback_payload("pb3", "G:99999"))
+    post_webhook(client, postback_payload("pb4", "boshqa"))
+    assert calls == []
+
+    logs = client.get("/logs").text
+    assert "Obuna ✅ havola berildi" in logs and "so‘raldi" in logs
+
+    edit = client.get(f"/rules/{rule_id}/edit").text
+    assert "https://shop.uz/gift.pdf" in edit and "Rahmat! Mana sovg" in edit
     assert client.get("/dashboard").status_code == 200
