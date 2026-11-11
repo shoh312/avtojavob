@@ -7,8 +7,8 @@ import { Button, PageHeader, Spinner, useToast } from '../../components/ui'
 
 type Platform = {
   telegram_username: string; smtp_host: string; smtp_port: string; smtp_user: string; smtp_from: string
-  google_client_id: string; google_redirect: string
-  smtp_password_set: boolean; google_client_secret_set: boolean; anthropic_api_key_set: boolean
+  google_client_id: string; google_redirect: string; ai_provider: 'gemini' | 'claude'; gemini_model: string
+  smtp_password_set: boolean; google_client_secret_set: boolean; anthropic_api_key_set: boolean; gemini_api_key_set: boolean
 }
 
 function Section({ icon, title, hint, children }: { icon: ReactNode; title: string; hint?: ReactNode; children: ReactNode }) {
@@ -44,7 +44,8 @@ export default function AdminSettings() {
     setP(r)
     setTg(r.telegram_username)
     setForm({ smtp_host: r.smtp_host, smtp_port: r.smtp_port || '587', smtp_user: r.smtp_user, smtp_from: r.smtp_from,
-      google_client_id: r.google_client_id, smtp_password: '', google_client_secret: '', anthropic_api_key: '' })
+      google_client_id: r.google_client_id, smtp_password: '', google_client_secret: '', anthropic_api_key: '',
+      ai_provider: r.ai_provider, gemini_model: r.gemini_model, gemini_api_key: '' })
   })
   useEffect(() => { load().catch(() => {}) }, [])
   if (!p) return <Spinner />
@@ -68,6 +69,15 @@ export default function AdminSettings() {
       refresh()
     } catch { toast(t('common.error'), 'error') } finally { setBusy('') }
   }
+  const testAi = async () => {
+    setBusy('testai')
+    try {
+      const r = await api.post<{ answer: string }>('/api/admin/platform/test-ai', {})
+      toast(`✅ ${r.answer}`)
+    } catch (e) {
+      toast(e instanceof ApiError ? `${t('err.ai_failed')} ${e.detail ?? ''}` : t('common.error'), 'error')
+    } finally { setBusy('') }
+  }
   const testEmail = async () => {
     setBusy('test')
     try { await api.post('/api/admin/platform/test-email', {}); toast(t('adm.pl.test_ok')) }
@@ -89,9 +99,35 @@ export default function AdminSettings() {
           </div>
         </Section>
 
-        <Section icon={<Sparkles className="h-4 w-4 text-[#d97757]" />} title={t('adm.pl.ai')} hint={t('adm.pl.ai_hint')}>
-          <Secret label={t('adm.pl.key')} isSet={p.anthropic_api_key_set} value={form.anthropic_api_key} onChange={set('anthropic_api_key')} />
-          <Button onClick={() => save('ai', ['anthropic_api_key'])} loading={busy === 'ai'} disabled={!form.anthropic_api_key}>{t('common.save')}</Button>
+        <Section icon={<Sparkles className="h-4 w-4 text-[#d97757]" />} title={t('adm.pl.ai')}>
+          <div>
+            <span className="label">{t('adm.pl.provider')}</span>
+            <div className="grid grid-cols-2 gap-2">
+              {(['gemini', 'claude'] as const).map(pv => (
+                <button key={pv} type="button" onClick={() => set('ai_provider')(pv)}
+                  className={`rounded-xl border px-3 py-2.5 text-left text-[13.5px] font-semibold ${form.ai_provider === pv ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-line hover:bg-soft'}`}>
+                  {pv === 'gemini' ? t('adm.pl.gemini') : 'Claude (Anthropic)'}
+                </button>
+              ))}
+            </div>
+          </div>
+          {form.ai_provider === 'gemini' ? (
+            <>
+              <p className="text-[13px] leading-relaxed text-ink-3">{t('adm.pl.gemini_hint')}</p>
+              <div className="rounded-xl bg-amber-50 px-3.5 py-2.5 text-[12.5px] leading-snug text-amber-900">{t('adm.pl.free_note')}</div>
+              <Secret label={t('adm.pl.key')} isSet={p.gemini_api_key_set} value={form.gemini_api_key} onChange={set('gemini_api_key')} />
+              {input('gemini_model', t('adm.pl.model'), 'gemini-flash-lite-latest')}
+            </>
+          ) : (
+            <>
+              <p className="text-[13px] leading-relaxed text-ink-3">{t('adm.pl.ai_hint')}</p>
+              <Secret label={t('adm.pl.key')} isSet={p.anthropic_api_key_set} value={form.anthropic_api_key} onChange={set('anthropic_api_key')} />
+            </>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => save('ai', ['ai_provider', 'gemini_model', 'gemini_api_key', 'anthropic_api_key'])} loading={busy === 'ai'}>{t('common.save')}</Button>
+            <Button variant="secondary" onClick={testAi} loading={busy === 'testai'} disabled={!(form.ai_provider === 'gemini' ? p.gemini_api_key_set : p.anthropic_api_key_set)}>{t('adm.pl.test_ai')}</Button>
+          </div>
         </Section>
 
         <Section icon={<Mail className="h-4 w-4 text-brand-600" />} title={t('adm.pl.email')} hint={t('adm.pl.email_hint')}>

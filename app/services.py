@@ -22,7 +22,7 @@ _http = httpx.Client(timeout=10)
 
 # ---------------------------------------------------------------- maxfiy sozlamalar (shifrlangan)
 
-SECRET_KEYS = ("smtp_password", "google_client_secret", "anthropic_api_key")
+SECRET_KEYS = ("smtp_password", "google_client_secret", "anthropic_api_key", "gemini_api_key")
 
 
 def get_secret(db: Session, key: str) -> str:
@@ -83,9 +83,11 @@ def email_html(title: str, body: str, button: str, url: str) -> str:
 </div>"""
 
 
-# ---------------------------------------------------------------- AI javoblar (Claude)
+# ---------------------------------------------------------------- AI javoblar (Gemini yoki Claude)
 
 AI_MODEL = "claude-opus-5-5"
+GEMINI_DEFAULT_MODEL = "gemini-flash-lite-latest"
+AI_PROVIDERS = ("gemini", "claude")
 AI_RULES = """You are the Instagram Direct assistant of a business. You reply to customers on the business's behalf.
 
 Rules:
@@ -98,47 +100,96 @@ Business information (written by the owner):
 """
 
 
+def ai_provider(db: Session) -> str:
+    p = get_setting(db, "ai_provider")
+    return p if p in AI_PROVIDERS else "gemini"
+
+
 def ai_available(db: Session) -> bool:
-    return bool(get_secret(db, "anthropic_api_key"))
+    key = "gemini_api_key" if ai_provider(db) == "gemini" else "anthropic_api_key"
+    return bool(get_secret(db, key))
 
 
-def ai_reply(db: Session, business_prompt: str, history: list[dict]) -> str | None:
-    """history: [{"role": "user"|"assistant", "content": str}, ...] — oxirgisi mijoz xabari.
+def _clean_history(history: list[dict]) -> list[dict]:
+    """Birinchi xabar mijozniki bo'lsin, ketma-ket bir xil rollar birlashtirilsin."""
+    out: list[dict] = []
+    for m in history:
+        if not out and m["role"] != "user":
+            continue
+        if out and out[-1]["role"] == m["role"]:
+            out[-1] = {"role": m["role"], "content": out[-1]["content"] + "\n" + m["content"]}
+        else:
+            out.append(dict(m))
+    return out
 
-    Javob matnini qaytaradi; rad etilsa yoki xato bo'lsa — None.
-    """
-    key = get_secret(db, "anthropic_api_key")
-    if not key or not history:
-        return None
-    # API birinchi xabar 'user' bo'lishini talab qiladi; ketma-ket bir xil rollar birlashtiriladi
-    while history and history[0]["role"] != "user":
-        history = history[1:]
-    if not history:
-        return None
-    client = anthropic.Anthropic(api_key=key, timeout=60, max_retries=2)
+
+def _gemini(db: Session, system: str, history: list[dict]) -> tuple[str | None, str | None]:
+    key = get_secret(db, "gemini_api_key")
+    model = (get_setting(db, "gemini_model") or GEMINI_DEFAULT_MODEL).strip()
+    body = {
+        "system_instruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
+                     for m in history],
+        "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.4},
+    }
+    try:
+        r = _http.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                       headers={"x-goog-api-key": key}, json=body, timeout=60)
+        data = r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        return None, f"connection: {e}"[:300]
+    if r.status_code >= 400:
+        err = (data.get("error") or {}) if isinstance(data, dict) else {}
+        return None, f"HTTP {r.status_code}: {err.get('message') or r.text[:200]}"[:300]
+    if (data.get("promptFeedback") or {}).get("blockReason"):
+        return None, f"blocked: {data['promptFeedback']['blockReason']}"
+    cand = (data.get("candidates") or [{}])[0]
+    if cand.get("finishReason") in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "RECITATION"):
+        return None, f"blocked: {cand['finishReason']}"
+    text = "".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts", []) if not p.get("thought"))
+    return text.strip() or None, None if text.strip() else "empty answer"
+
+
+def _claude(db: Session, system: str, history: list[dict]) -> tuple[str | None, str | None]:
+    client = anthropic.Anthropic(api_key=get_secret(db, "anthropic_api_key"), timeout=60, max_retries=2)
     try:
         response = client.beta.messages.create(
             model=AI_MODEL,
             max_tokens=2000,
-            system=AI_RULES + (business_prompt.strip() or "(no information provided)"),
+            system=system,
             messages=history,
             output_config={"effort": "low"},
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
         )
     except anthropic.RateLimitError as e:
-        log.warning("AI rate limit: %s", e)
-        return None
+        return None, f"rate limit: {e}"[:300]
     except anthropic.APIStatusError as e:
-        log.warning("AI API xatosi %s: %s", e.status_code, e.message)
-        return None
+        return None, f"HTTP {e.status_code}: {e.message}"[:300]
     except anthropic.APIConnectionError as e:
-        log.warning("AI ulanish xatosi: %s", e)
-        return None
+        return None, f"connection: {e}"[:300]
     if response.stop_reason == "refusal":
-        return None
+        return None, "refusal"
     text = "".join(b.text for b in response.content if b.type == "text").strip()
-    return text[:950] or None
+    return text or None, None if text else "empty answer"
+
+
+def ai_generate(db: Session, business_prompt: str, history: list[dict]) -> tuple[str | None, str | None]:
+    """(javob, xato). history: [{"role": "user"|"assistant", "content": str}, ...] — oxirgisi mijozniki."""
+    if not ai_available(db):
+        return None, "not configured"
+    history = _clean_history(history)
+    if not history:
+        return None, "empty history"
+    system = AI_RULES + (business_prompt.strip() or "(no information provided)")
+    text, error = (_gemini if ai_provider(db) == "gemini" else _claude)(db, system, history)
+    if error:
+        log.warning("AI (%s): %s", ai_provider(db), error)
+    return (text[:950] if text else None), error
+
+
+def ai_reply(db: Session, business_prompt: str, history: list[dict]) -> str | None:
+    return ai_generate(db, business_prompt, history)[0]
 
 
 # ---------------------------------------------------------------- Telegram

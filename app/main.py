@@ -1206,7 +1206,7 @@ def admin_set_password(user_id: int, body: dict = Body(...), admin: User = Depen
     return {"ok": True}
 
 
-PLAIN_SETTINGS = ("smtp_host", "smtp_port", "smtp_user", "smtp_from", "google_client_id")
+PLAIN_SETTINGS = ("smtp_host", "smtp_port", "smtp_user", "smtp_from", "google_client_id", "ai_provider", "gemini_model")
 
 
 def _platform_settings(db: Session) -> dict:
@@ -1216,6 +1216,8 @@ def _platform_settings(db: Session) -> dict:
     for k in services.SECRET_KEYS:
         out[f"{k}_set"] = bool(get_setting(db, k))
     out["google_redirect"] = _google_redirect()
+    out["ai_provider"] = services.ai_provider(db)
+    out["gemini_model"] = out["gemini_model"] or services.GEMINI_DEFAULT_MODEL
     return out
 
 
@@ -1226,6 +1228,8 @@ def admin_platform(admin: User = Depends(admin_user), db: Session = Depends(get_
 
 @app.put("/api/admin/platform")
 def admin_platform_save(body: dict = Body(...), admin: User = Depends(admin_user), db: Session = Depends(get_db)):
+    if "ai_provider" in body and body["ai_provider"] not in services.AI_PROVIDERS:
+        err("bad_provider")
     for k in PLAIN_SETTINGS:
         if k in body:
             set_setting(db, k, str(body[k] or "").strip()[:255])
@@ -1235,6 +1239,15 @@ def admin_platform_save(body: dict = Body(...), admin: User = Depends(admin_user
         if body.get(f"clear_{k}"):
             services.set_secret(db, k, "")
     return _platform_settings(db)
+
+
+@app.post("/api/admin/platform/test-ai")
+def admin_test_ai(admin: User = Depends(admin_user), db: Session = Depends(get_db)):
+    answer, error = services.ai_generate(db, "A flower shop in Dushanbe. Delivery is free.",
+                                         [{"role": "user", "content": "Salom! Yetkazib berish bepulmi?"}])
+    if not answer:
+        return JSONResponse({"error": "ai_failed", "detail": error or ""}, status_code=400)
+    return {"answer": answer, "provider": services.ai_provider(db)}
 
 
 @app.post("/api/admin/platform/test-email")

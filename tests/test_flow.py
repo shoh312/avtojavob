@@ -508,3 +508,47 @@ def test_password_reset_and_verify(client, monkeypatch):
     r = client.get(f"/verify-email?token={vtoken}", follow_redirects=False)
     assert r.headers["location"] == "/app?verified=1" and client.get("/api/me").json()["user"]["email_verified"]
     assert client.get("/health").json() == {"ok": True}
+
+
+def test_gemini_provider(client, monkeypatch):
+    from app import services
+    _login(client, "boss@chatflow.tj")
+    r = client.put("/api/admin/platform", json={"ai_provider": "gemini", "gemini_api_key": "AIza-test"}, headers=H).json()
+    assert r["ai_provider"] == "gemini" and r["gemini_api_key_set"] and r["gemini_model"] == "gemini-flash-lite-latest"
+    assert client.put("/api/admin/platform", json={"ai_provider": "gpt"}, headers=H).json()["error"] == "bad_provider"
+
+    seen = {}
+
+    class Resp:
+        def __init__(self, status, data):
+            self.status_code, self._data, self.text = status, data, str(data)
+
+        def json(self):
+            return self._data
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        seen.update(url=url, headers=headers, body=json)
+        return Resp(200, {"candidates": [{"content": {"parts": [{"text": "Ha, yetkazish bepul 🚚"}]}, "finishReason": "STOP"}]})
+    monkeypatch.setattr(services._http, "post", fake_post)
+    r = client.post("/api/admin/platform/test-ai", headers=H).json()
+    assert r == {"answer": "Ha, yetkazish bepul 🚚", "provider": "gemini"}
+    assert seen["url"].endswith("/models/gemini-flash-lite-latest:generateContent")
+    assert seen["headers"] == {"x-goog-api-key": "AIza-test"}
+    assert seen["body"]["contents"] == [{"role": "user", "parts": [{"text": "Salom! Yetkazib berish bepulmi?"}]}]
+    assert "flower shop" in seen["body"]["system_instruction"]["parts"][0]["text"]
+
+    # tarix: assistent -> model, ketma-ket rollar birlashadi, boshidagi assistent xabari tashlanadi
+    with SessionLocal() as db:
+        services.ai_generate(db, "x", [{"role": "assistant", "content": "a"}, {"role": "user", "content": "1"},
+                                       {"role": "user", "content": "2"}, {"role": "assistant", "content": "b"},
+                                       {"role": "user", "content": "3"}])
+    assert [c["role"] for c in seen["body"]["contents"]] == ["user", "model", "user"]
+    assert seen["body"]["contents"][0]["parts"][0]["text"] == "1\n2"
+
+    # xato va bloklash
+    monkeypatch.setattr(services._http, "post", lambda *a, **k: Resp(400, {"error": {"message": "User location is not supported for the API use."}}))
+    r = client.post("/api/admin/platform/test-ai", headers=H)
+    assert r.status_code == 400 and "location is not supported" in r.json()["detail"]
+    monkeypatch.setattr(services._http, "post", lambda *a, **k: Resp(200, {"candidates": [{"finishReason": "SAFETY"}]}))
+    with SessionLocal() as db:
+        assert services.ai_reply(db, "x", [{"role": "user", "content": "?"}]) is None
