@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { api, ApiError, type Account, type User } from './api'
 import { useI18n, type Lang } from './i18n'
 
-type Me = { user: User; accounts: Account[]; ig_ready: boolean }
+type Me = { user: User; accounts: Account[]; ig_ready: boolean; telegram: string }
 type AuthCtx = {
   me: Me | null
   loading: boolean

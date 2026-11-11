@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Activity, Check, ChevronsUpDown, Home, Instagram, LogOut, Menu, Plus, Settings, Users, Workflow, X } from 'lucide-react'
+import { Activity, BarChart3, Check, ChevronsUpDown, CreditCard, Home, Instagram, LogOut, Menu, Plus, Settings, SlidersHorizontal, UserCog, Users, Workflow, X } from 'lucide-react'
 import { useAuth } from '../auth'
 import { useI18n, type TKey } from '../i18n'
 import { api } from '../api'
 import { Logo } from './Logo'
 import { Avatar } from './ui'
+import { PlanBadge, PlanBanner, planStatus } from './Plan'
 
 const NAV: { to: string; key: TKey; icon: typeof Home; end?: boolean }[] = [
   { to: '/app', key: 'nav.home', icon: Home, end: true },
@@ -13,7 +14,14 @@ const NAV: { to: string; key: TKey; icon: typeof Home; end?: boolean }[] = [
   { to: '/app/contacts', key: 'nav.contacts', icon: Users },
   { to: '/app/activity', key: 'nav.activity', icon: Activity },
   { to: '/app/accounts', key: 'nav.accounts', icon: Instagram },
+  { to: '/app/billing', key: 'nav.billing', icon: CreditCard },
   { to: '/app/settings', key: 'nav.settings', icon: Settings },
+]
+
+const ADMIN_NAV: { to: string; key: TKey; icon: typeof Home; end?: boolean }[] = [
+  { to: '/app/admin', key: 'nav.admin', icon: BarChart3, end: true },
+  { to: '/app/admin/users', key: 'nav.admin_users', icon: UserCog },
+  { to: '/app/admin/settings', key: 'nav.admin_settings', icon: SlidersHorizontal },
 ]
 
 function AccountSwitcher() {
@@ -65,7 +73,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     navigate('/')
   }
   return (
-    <div className="flex h-full flex-col gap-6 p-4">
+    <div className="scrollbar-thin flex h-full flex-col gap-6 overflow-y-auto p-4">
       <div className="px-2 pt-1"><Logo size={28} /></div>
       <AccountSwitcher />
       <nav className="flex flex-col gap-0.5">
@@ -73,9 +81,21 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <NavLink key={to} to={to} end={end} onClick={onNavigate}
             className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2.5 text-[14px] font-medium transition ${isActive ? 'bg-brand-50 text-brand-700' : 'text-ink-2 hover:bg-soft'}`}>
             <Icon className="h-[18px] w-[18px]" strokeWidth={2} />{t(key)}
+            {to === '/app/billing' && me && !me.user.plan.unlimited && <span className="ml-auto"><PlanBadge status={planStatus(me.user.plan)} /></span>}
           </NavLink>
         ))}
       </nav>
+      {me?.user.is_admin && (
+        <nav className="flex flex-col gap-0.5">
+          <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-4">{t('nav.admin_section')}</div>
+          {ADMIN_NAV.map(({ to, key, icon: Icon, end }) => (
+            <NavLink key={to} to={to} end={end} onClick={onNavigate}
+              className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2.5 text-[14px] font-medium transition ${isActive ? 'bg-ink text-white' : 'text-ink-2 hover:bg-soft'}`}>
+              <Icon className="h-[18px] w-[18px]" strokeWidth={2} />{t(key)}
+            </NavLink>
+          ))}
+        </nav>
+      )}
       <div className="mt-auto border-t border-line pt-4">
         <div className="flex items-center gap-3 px-2">
           <Avatar name={me?.user.name || me?.user.email || '?'} size={32} />
@@ -110,7 +130,7 @@ export default function AppLayout() {
         </div>
       )}
       <main className="lg:pl-[260px]">
-        <div className="mx-auto max-w-6xl px-4 py-8 sm:px-8 sm:py-10"><Outlet /></div>
+        <div className="mx-auto max-w-6xl px-4 py-8 sm:px-8 sm:py-10"><PlanBanner /><Outlet /></div>
       </main>
     </div>
   )

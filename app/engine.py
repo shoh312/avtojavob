@@ -23,6 +23,7 @@ from .db import SessionLocal
 from .flows import field_key, trigger_of
 from .models import (SEND_KINDS, Contact, EventLog, Flow, FlowSession, IGAccount, NodeStat, ProcessedEvent,
                      ScheduledJob, utcnow)
+from .plans import account_owner_active
 from .security import decrypt, encrypt
 
 log = logging.getLogger("engine")
@@ -494,7 +495,7 @@ def process_payload(payload: dict) -> None:
     try:
         for entry in payload.get("entry", []):
             account = db.scalar(select(IGAccount).where(IGAccount.ig_user_id == str(entry.get("id"))))
-            if not account or not account.active:
+            if not account or not account_owner_active(account):
                 continue
             for change in entry.get("changes", []):
                 if change.get("field") == "comments":
@@ -527,7 +528,7 @@ def run_due_jobs() -> int:
             node_id = job.node_id
             db.delete(job)
             db.commit()
-            if not flow or not contact or not flow.active or not flow.account.active:
+            if not flow or not contact or not flow.active or not account_owner_active(flow.account):
                 continue
             try:
                 run_from(make_ctx(db, flow.account, contact, flow, incoming="[delay]"), node_id)

@@ -16,11 +16,21 @@ import Activity from './pages/Activity'
 import Accounts from './pages/Accounts'
 import Settings from './pages/Settings'
 import FlowEditor from './editor/FlowEditor'
+import Billing from './pages/Billing'
+import AdminOverviewPage from './pages/admin/AdminOverview'
+import AdminUsers from './pages/admin/AdminUsers'
+import AdminSettings from './pages/admin/AdminSettings'
 
 function Protected({ children }: { children: JSX.Element }) {
   const { me, loading } = useAuth()
   if (loading) return <Spinner className="min-h-screen" />
   if (!me) return <Navigate to="/login" replace />
+  return children
+}
+
+function AdminOnly({ children }: { children: JSX.Element }) {
+  const { me } = useAuth()
+  if (!me?.user.is_admin) return <Navigate to="/app" replace />
   return children
 }
 
@@ -49,6 +59,10 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="activity" element={<Activity />} />
                 <Route path="accounts" element={<Accounts />} />
                 <Route path="settings" element={<Settings />} />
+                <Route path="billing" element={<Billing />} />
+                <Route path="admin" element={<AdminOnly><AdminOverviewPage /></AdminOnly>} />
+                <Route path="admin/users" element={<AdminOnly><AdminUsers /></AdminOnly>} />
+                <Route path="admin/settings" element={<AdminOnly><AdminSettings /></AdminOnly>} />
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

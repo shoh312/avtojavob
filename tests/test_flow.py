@@ -280,3 +280,82 @@ def test_button_must_be_connected(client):
     assert r["active"] is False
     assert {"node": first["id"], "code": "button_unconnected"} in r["errors"]
     client.delete(f"/api/flows/{flow['id']}", headers=H)
+
+
+# ------------------------------------------------------------------ tariflar va admin
+
+def test_trial_and_plan_expiry(client):
+    me = client.get("/api/me").json()["user"]
+    assert me["plan"]["plan"] == "trial" and me["plan"]["active"] and me["plan"]["days_left"] == 7
+    plans = client.get("/api/plans").json()
+    assert [p["price"] for p in plans["plans"]] == [0, 199, 499] and plans["currency"] == "TJS"
+
+    # muddat tugasa — webhook e'tiborsiz qoldiriladi
+    flow = create(client, "price")
+    activate(client, flow)
+    from app.models import User
+    with SessionLocal() as db:
+        u = db.get(User, me["id"])
+        u.plan_expires_at = utcnow() - timedelta(minutes=1)
+        db.commit()
+    calls.clear()
+    hook(client, comment("c900", "narx"))
+    assert calls == []
+    assert client.get("/api/me").json()["user"]["plan"]["active"] is False
+    S["flow_price"] = flow["id"]
+
+
+def test_admin_panel(client):
+    from app.models import User
+    assert client.get("/api/admin/overview").status_code == 403  # oddiy foydalanuvchi
+    me = client.get("/api/me").json()["user"]
+    # ikkinchi foydalanuvchi (mijoz) va admin
+    client.post("/api/auth/logout", headers=H)
+    client.post("/api/auth/register", json={"email": "boss@chatflow.tj", "password": "12345678"}, headers=H)
+    with SessionLocal() as db:
+        db.query(User).filter_by(email="boss@chatflow.tj").one().is_admin = True
+        db.commit()
+
+    ov = client.get("/api/admin/overview").json()
+    assert ov["users_total"] == 2 and ov["status"]["expired"] == 1 and len(ov["series"]["signups"]) == 30
+
+    users = client.get("/api/admin/users?status=expired").json()["items"]
+    assert [u["email"] for u in users] == ["a@b.tj"] and users[0]["accounts"] == ["dokon"]
+
+    d = client.post(f"/api/admin/users/{me['id']}/grant", json={"plan": "pro", "days": 30, "amount": 199,
+                                                                   "note": "chek #1"}, headers=H).json()
+    assert d["status"] == "pro" and d["plan"]["days_left"] == 30 and d["grants"][0]["amount"] == 199
+    d = client.post(f"/api/admin/users/{me['id']}/grant", json={"plan": "pro", "days": 30, "amount": 199},
+                    headers=H).json()
+    assert d["plan"]["days_left"] == 60  # uzaytirildi
+    ov = client.get("/api/admin/overview").json()
+    assert ov["mrr"] == 199 and ov["revenue_month"] == 398 and ov["series"]["revenue"][-1]["value"] == 398
+
+    # Pro bilan avtomatika yana ishlaydi
+    calls.clear()
+    hook(client, comment("c901", "narx"))
+    assert any(c[0] == "private" for c in calls)
+
+    # Telegram sozlamasi
+    r = client.put("/api/admin/settings", json={"telegram_username": "https://t.me/chatflow_admin"}, headers=H)
+    assert r.json()["telegram_username"] == "chatflow_admin"
+    assert client.put("/api/admin/settings", json={"telegram_username": "bad name!"}, headers=H).status_code == 400
+
+    # bloklash
+    client.post(f"/api/admin/users/{me['id']}/block", json={"blocked": True}, headers=H)
+    client.post("/api/auth/logout", headers=H)
+    assert client.post("/api/auth/login", json={"email": "a@b.tj", "password": "12345678"},
+                       headers=H).json()["error"] == "blocked"
+    client.post("/api/auth/login", json={"email": "boss@chatflow.tj", "password": "12345678"}, headers=H)
+    client.post(f"/api/admin/users/{me['id']}/block", json={"blocked": False}, headers=H)
+    r = client.post("/api/auth/login", json={"email": "a@b.tj", "password": "12345678"}, headers=H).json()
+    assert r["user"]["plan"]["plan"] == "pro" and client.get("/api/plans").json()["telegram"] == "chatflow_admin"
+
+
+def test_series_and_account_limit(client):
+    s = client.get(f"/api/stats/series?account_id={S['acc']}&days=30").json()
+    assert len(s["sent"]) == 30 and s["sent"][-1]["value"] > 0 and s["top_flows"]
+    from app.main import accounts_limit
+    from app.models import User
+    with SessionLocal() as db:
+        assert accounts_limit(db.query(User).filter_by(email="a@b.tj").one()) == 1

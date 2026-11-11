@@ -22,7 +22,7 @@ export default function Accounts() {
         if (acc) setAccountId(acc.id)
       })
     }
-    if (bad) toast(bad === 'not_configured' ? t('acc.not_configured') : t('acc.error', { e: bad }), 'error')
+    if (bad) toast(bad === 'not_configured' ? t('acc.not_configured') : bad === 'plan_limit' ? t('acc.limit', { n: me?.user.plan.accounts_limit ?? 1 }) : t('acc.error', { e: bad }), 'error')
     setParams({}, { replace: true })
   }, [params]) // eslint-disable-line react-hooks/exhaustive-deps
 

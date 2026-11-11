@@ -24,7 +24,21 @@ export const api = {
 }
 
 // ---- turlar
-export type User = { id: number; email: string; name: string; lang: string; is_admin: boolean }
+export type PlanKey = 'trial' | 'pro' | 'business'
+export type PlanInfo = { plan: PlanKey; active: boolean; expires_at: string; days_left: number; accounts_limit: number; unlimited: boolean }
+export type User = { id: number; email: string; name: string; lang: string; is_admin: boolean; plan: PlanInfo }
+export type Plans = { currency: string; trial_days: number; telegram: string; plans: { key: PlanKey; price: number; accounts: number }[]; current: PlanInfo }
+export type SeriesPoint = { date: string; value: number }
+export type AdminUser = User & {
+  is_blocked: boolean; status: 'trial' | 'pro' | 'business' | 'expired' | 'blocked'; created_at: string; last_login_at: string | null
+  accounts: string[]; flows: number; sent_30d: number
+}
+export type AdminUserDetail = AdminUser & { grants: { id: number; plan: PlanKey; days: number; amount: number; note: string; created_at: string; expires_at: string | null }[] }
+export type AdminOverview = {
+  users_total: number; users_7d: number; status: Record<string, number>; mrr: number; revenue_month: number; revenue_total: number
+  ig_accounts: number; flows_active: number; contacts: number; sent_24h: number; currency: string
+  series: { signups: SeriesPoint[]; sent: SeriesPoint[]; revenue: SeriesPoint[] }
+}
 export type Account = { id: number; username: string; name: string; picture_url: string; active: boolean; token_expires_at: string | null }
 export type TriggerKind = 'comment' | 'dm' | 'story_reply' | 'story_mention'
 export type FlowSummary = {

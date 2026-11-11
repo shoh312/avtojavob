@@ -19,6 +19,7 @@ class Settings:
 
     GRAPH_VERSION = os.getenv("GRAPH_VERSION", "v23.0")
     HOURLY_SEND_LIMIT = int(os.getenv("HOURLY_SEND_LIMIT", "180"))
+    ADMIN_EMAILS = os.getenv("ADMIN_EMAILS", "")
 
     @property
     def redirect_uri(self) -> str:

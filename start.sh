@@ -118,6 +118,12 @@ fi
 [ -n "$(get_env IG_APP_ID)" ] && [ -n "$(get_env IG_APP_SECRET)" ] \
     && ok "Instagram kalitlari bor" \
     || warn "IG_APP_ID / IG_APP_SECRET hali yo'q — keyin: sudo nano $ENV_FILE  va  sudo systemctl restart $SERVICE"
+[ -n "${ADMIN_EMAILS:-}" ] && set_env ADMIN_EMAILS "$ADMIN_EMAILS"
+if [ -z "$(get_env ADMIN_EMAILS)" ] && [ -t 0 ]; then
+    read -rp "  Admin panel uchun email (ChatFlow'dagi hisobingiz): " _adm
+    [ -n "$_adm" ] && set_env ADMIN_EMAILS "$_adm"
+fi
+[ -n "$(get_env ADMIN_EMAILS)" ] && ok "Admin: $(get_env ADMIN_EMAILS)"
 chmod 600 "$ENV_FILE"
 
 # ---------------------------------------------------------------------

@@ -25,6 +25,11 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     lang: Mapped[str] = mapped_column(String(5), default="ru")
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Tarif: trial | pro | business. Muddati tugasa — avtomatika to'xtaydi
+    plan: Mapped[str] = mapped_column(String(20), default="trial")
+    plan_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     accounts: Mapped[list["IGAccount"]] = relationship(
@@ -211,3 +216,26 @@ class EventLog(Base):
     incoming: Mapped[str] = mapped_column(Text, default="")
     detail: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class PlanGrant(Base):
+    """Admin tomonidan berilgan tarif (qo'lda to'lov) — daromad statistikasi shu yerdan."""
+
+    __tablename__ = "plan_grants"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    plan: Mapped[str] = mapped_column(String(20))
+    days: Mapped[int] = mapped_column(Integer, default=30)
+    amount: Mapped[int] = mapped_column(Integer, default=0)  # somoni
+    note: Mapped[str] = mapped_column(String(255), default="")
+    granted_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")

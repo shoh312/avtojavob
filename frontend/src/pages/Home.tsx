@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowRight, Instagram, MessageSquareText, Play, Users, Workflow } from 'lucide-react'
-import { api, type FlowSummary, type Stats } from '../api'
+import { api, type FlowSummary, type SeriesPoint, type Stats } from '../api'
+import { AreaChart, BarChart, ChartCard, HBars, fmtNum } from '../components/charts'
 import { useAuth } from '../auth'
 import { useI18n, useTimeAgo } from '../i18n'
 import { TemplateCard, useCreateFlow, useTemplates } from '../components/NewFlowModal'
@@ -47,6 +48,7 @@ export default function Home() {
   const { me, account } = useAuth()
   const [stats, setStats] = useState<Stats | null>(null)
   const [flows, setFlows] = useState<FlowSummary[]>([])
+  const [series, setSeries] = useState<{ sent: SeriesPoint[]; contacts: SeriesPoint[]; top_flows: { id: number; name: string; value: number }[] } | null>(null)
   const templates = useTemplates()
   const create = useCreateFlow(account?.id)
 
@@ -54,6 +56,7 @@ export default function Home() {
     if (!account) return
     api.get<Stats>(`/api/stats?account_id=${account.id}`).then(setStats).catch(() => {})
     api.get<{ items: FlowSummary[] }>(`/api/flows?account_id=${account.id}`).then(r => setFlows(r.items.slice(0, 5))).catch(() => {})
+    api.get<typeof series>(`/api/stats/series?account_id=${account.id}&days=30`).then(setSeries).catch(() => {})
   }, [account])
 
   const name = me?.user.name?.split(' ')[0]
@@ -73,6 +76,24 @@ export default function Home() {
             <StatCard icon={Workflow} label={t('home.stat.flows')} value={stats ? `${stats.flows_active}/${stats.flows_total}` : '—'} />
             <StatCard icon={Play} label={t('home.stat.runs')} value={stats?.runs_total ?? '—'} />
           </div>
+
+          {series && (
+            <section className="grid gap-4 lg:grid-cols-3">
+              <div className="lg:col-span-2">
+                <ChartCard title={t('home.chart.sent')} value={fmtNum(series.sent.reduce((a, p) => a + p.value, 0))} sub={t('home.chart.period')}>
+                  <AreaChart data={series.sent} label={t('home.chart.sent')} />
+                </ChartCard>
+              </div>
+              <ChartCard title={t('home.chart.top')} sub={t('home.chart.period')}>
+                <HBars items={series.top_flows} empty={t('home.chart.empty')} />
+              </ChartCard>
+              <div className="lg:col-span-3">
+                <ChartCard title={t('home.chart.contacts')} value={fmtNum(series.contacts.reduce((a, p) => a + p.value, 0))} sub={t('home.chart.period')}>
+                  <BarChart data={series.contacts} label={t('home.chart.contacts')} height={180} />
+                </ChartCard>
+              </div>
+            </section>
+          )}
 
           <section>
             <h2 className="mb-4 text-[17px] font-bold">{t('home.templates')}</h2>

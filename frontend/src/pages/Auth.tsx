@@ -25,7 +25,7 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
       navigate('/app')
     } catch (err) {
       const code = err instanceof ApiError ? err.code : 'error'
-      const known = ['email_invalid', 'password_short', 'email_taken', 'login_failed', 'password_wrong']
+      const known = ['email_invalid', 'password_short', 'email_taken', 'login_failed', 'password_wrong', 'blocked']
       setError(known.includes(code) ? t(`err.${code}` as TKey) : t('common.error'))
     } finally {
       setBusy(false)
