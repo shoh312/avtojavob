@@ -73,7 +73,7 @@ export default function Integrations() {
             <div className="flex gap-2">
               <input className="input flex-1" value={question} placeholder={t('int.ai.test_ph')} onChange={e => setQuestion(e.target.value)} />
               <Button size="md" variant="dark" loading={busy === 'ai'} disabled={!question.trim() || !d.ai_available}
-                onClick={() => run('ai', async () => setAnswer((await api.post<{ answer: string }>(`${base}/ai/test`, { message: question, prompt })).answer))}>
+                onClick={() => run('ai', async () => setAnswer((await api.post<{ answer: string }>(`${base}/ai/test`, { message: question, prompt, collect_leads: d.ai_collect_leads })).answer))}>
                 <Bot className="h-4 w-4" />{t('int.ai.test')}
               </Button>
             </div>

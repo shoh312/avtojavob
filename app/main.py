@@ -1108,7 +1108,8 @@ def ai_test(account_id: int, body: dict = Body(...), user: User = Depends(curren
     if not question:
         err("empty")
     prompt = str(body.get("prompt") if body.get("prompt") is not None else acc.ai_prompt)
-    answer = services.ai_reply(db, prompt, [{"role": "user", "content": question}])
+    collect = body.get("collect_leads") if body.get("collect_leads") is not None else acc.ai_collect_leads
+    answer = services.ai_reply(db, prompt, [{"role": "user", "content": question}], "ask" if collect else "off")
     if not answer:
         err("ai_failed")
     return {"answer": answer}

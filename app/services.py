@@ -92,19 +92,26 @@ AI_RULES = """You are the Instagram Direct assistant of a business. You reply to
 
 Rules:
 - Reply in the same language the customer writes in (Tajik, Russian, Uzbek, English, ...).
-- Use ONLY facts from the business information below. If the answer isn't there, say politely that a manager will reply soon — never invent prices, addresses, stock or promises.
+- Use ONLY facts from the business information below — never invent prices, addresses, stock or promises.
 - Keep it short and friendly: plain text, no markdown, at most 3-4 sentences (Instagram shows plain text only).
 - Never ask for card numbers, passwords or codes.
-
+"""
+AI_NO_LEADS = """- If the answer isn't in the business information, say politely that a manager will reply soon.
+"""
+AI_LEADS = """- Your main goal is to get the customer's phone number so a manager can call them back.
+- When the customer asks about prices, products, availability, delivery or how to order: answer from the business \
+information, then END your reply by asking for their phone number (for example: "Leave your phone number and our \
+manager will contact you").
+- If the answer isn't in the business information, don't just say a manager will reply — ask for their phone number \
+so the manager can contact them.
+- Once the customer has given a phone number, or clearly refused, don't ask for it again.
+"""
+AI_LEADS_DONE = """- The customer has already given their phone number — don't ask for it again. If the answer isn't in the business \
+information, say a manager will contact them soon.
+"""
+AI_BUSINESS = """
 Business information (written by the owner):
 """
-
-
-AI_LEAD_RULE = """
-
-Lead collection: if the customer shows interest in buying or ordering (asks about price, availability, delivery, \
-how to order), politely ask for their phone number so a manager can contact them — at most once, and don't ask again \
-if they already gave it or refused."""
 
 
 def ai_provider(db: Session) -> str:
@@ -181,22 +188,28 @@ def _claude(db: Session, system: str, history: list[dict]) -> tuple[str | None, 
     return text or None, None if text else "empty answer"
 
 
-def ai_generate(db: Session, business_prompt: str, history: list[dict]) -> tuple[str | None, str | None]:
+def build_system(business_prompt: str, leads: str = "off") -> str:
+    """leads: off | ask (telefon so'rash) | done (telefon allaqachon olingan)."""
+    rules = {"ask": AI_LEADS, "done": AI_LEADS_DONE}.get(leads, AI_NO_LEADS)
+    return AI_RULES + rules + AI_BUSINESS + (business_prompt.strip() or "(no information provided)")
+
+
+def ai_generate(db: Session, business_prompt: str, history: list[dict], leads: str = "off") -> tuple[str | None, str | None]:
     """(javob, xato). history: [{"role": "user"|"assistant", "content": str}, ...] — oxirgisi mijozniki."""
     if not ai_available(db):
         return None, "not configured"
     history = _clean_history(history)
     if not history:
         return None, "empty history"
-    system = AI_RULES + (business_prompt.strip() or "(no information provided)")
+    system = build_system(business_prompt, leads)
     text, error = (_gemini if ai_provider(db) == "gemini" else _claude)(db, system, history)
     if error:
         log.warning("AI (%s): %s", ai_provider(db), error)
     return (text[:950] if text else None), error
 
 
-def ai_reply(db: Session, business_prompt: str, history: list[dict]) -> str | None:
-    return ai_generate(db, business_prompt, history)[0]
+def ai_reply(db: Session, business_prompt: str, history: list[dict], leads: str = "off") -> str | None:
+    return ai_generate(db, business_prompt, history, leads)[0]
 
 
 # ---------------------------------------------------------------- Telegram

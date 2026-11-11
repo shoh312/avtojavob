@@ -408,7 +408,7 @@ def test_ai_assistant(client, monkeypatch):
     seen = {}
     monkeypatch.setattr(services, "ai_available", lambda db: True)
 
-    def fake_reply(db, prompt, history):
+    def fake_reply(db, prompt, history, leads="off"):
         seen["prompt"], seen["history"] = prompt, history
         return "Ish vaqti 9:00–18:00"
     monkeypatch.setattr(services, "ai_reply", fake_reply)
@@ -418,7 +418,7 @@ def test_ai_assistant(client, monkeypatch):
     assert seen["prompt"] == "Dokon: kiyimlar"
     assert seen["history"][-1] == {"role": "user", "content": "Soat nechagacha ishlaysiz?"}
 
-    monkeypatch.setattr(services, "ai_reply", lambda db, p, h: None)  # rad etildi / xato
+    monkeypatch.setattr(services, "ai_reply", lambda db, p, h, leads="off": None)  # rad etildi / xato
     calls.clear()
     hook(client, text_msg(LONG_MID + "ai2", "???"))
     assert calls == []
@@ -705,13 +705,15 @@ def test_lead_capture_from_direct(client, monkeypatch):
     monkeypatch.setattr(services, "_tg", lambda token, method, **p: sent.append((method, p)) or {"message_id": 1})
     seen = {}
     monkeypatch.setattr(services, "ai_available", lambda db: True)
-    monkeypatch.setattr(services, "ai_reply", lambda db, prompt, h: seen.setdefault("prompt", prompt) and "Rahmat!")
+    monkeypatch.setattr(services, "ai_reply", lambda db, prompt, h, leads="off": seen.setdefault("leads", leads) and "Rahmat!")
     client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": True, "ai_collect_leads": True}, headers=H)
 
     msg = lambda mid, text: {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [  # noqa: E731
         {"sender": {"id": "lead-1"}, "recipient": {"id": IG_ID}, "timestamp": 1, "message": {"mid": mid, "text": text}}]}]}
     hook(client, msg(LONG_MID + "l1", "Narxi qancha?"))
-    assert "ask for their phone number" in seen["prompt"]  # AI telefon so'rashga yo'naltirilgan
+    assert seen["leads"] == "ask"  # AI telefon so'rashga yo'naltirilgan
+    assert "END your reply by asking for their phone number" in services.build_system("x", "ask")
+    assert "manager will reply soon" not in services.build_system("x", "ask")
     sent.clear()
     hook(client, msg(LONG_MID + "l2", "Mening raqamim 90 123 45 67"))
     with SessionLocal() as db:
@@ -723,6 +725,6 @@ def test_lead_capture_from_direct(client, monkeypatch):
     seen.clear()
     sent.clear()
     hook(client, msg(LONG_MID + "l3", "90 123 45 67"))
-    assert "ask for their phone number" not in seen.get("prompt", "")
+    assert seen.get("leads") == "done"
     assert not any("🎯" in p.get("text", "") for m, p in sent if m == "sendMessage")
     client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": False}, headers=H)

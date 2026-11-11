@@ -620,10 +620,8 @@ def ai_answer(db: Session, account: IGAccount, contact: Contact, text: str) -> b
     rows = db.scalars(select(Message).where(Message.contact_id == contact.id, Message.source != "comment")
                       .order_by(Message.id.desc()).limit(12)).all()
     history = [{"role": "user" if m.direction == "in" else "assistant", "content": m.text or "…"} for m in reversed(rows)]
-    prompt = account.ai_prompt
-    if account.ai_collect_leads and not contact.fields.get("phone"):
-        prompt += services.AI_LEAD_RULE
-    answer = services.ai_reply(db, prompt, history)
+    leads = "off" if not account.ai_collect_leads else ("done" if contact.fields.get("phone") else "ask")
+    answer = services.ai_reply(db, account.ai_prompt, history, leads)
     if not answer:
         log_event(db, account, contact, "skipped", text, "ai_no_answer")
         return False
