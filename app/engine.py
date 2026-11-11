@@ -23,7 +23,7 @@ from .db import SessionLocal
 from .flows import field_key, trigger_of
 from .models import (SEND_KINDS, Broadcast, Contact, EventLog, Flow, FlowSession, IGAccount, Message, NodeStat,
                      ProcessedEvent, ScheduledJob, utcnow)
-from . import services
+from . import crm, services
 from .plans import account_owner_active
 from .security import decrypt, encrypt
 
@@ -278,6 +278,10 @@ def apply_action(ctx: Ctx, d: dict) -> None:
             notify_telegram(ctx.account, contact_card(c, f"🔔 {fill(d.get('text', ''), c) or ctx.flow.name}"))
         else:
             ctx.log("error", "notify → telegram_not_connected")
+    elif op == "set_stage":
+        if not crm.set_stage(ctx.db, c, (d.get("stage") or "").strip(), f"⚡ {ctx.flow.name}") and \
+                not crm.stage_by_id(ctx.account, d.get("stage")):
+            ctx.log("error", "set_stage → unknown_stage")
     elif op == "webhook":
         payload = {"event": "flow_webhook", "flow": {"id": ctx.flow.id, "name": ctx.flow.name},
                    "account": ctx.account.username,
@@ -444,6 +448,9 @@ def handle_answer(db: Session, account: IGAccount, contact: Contact, session: Fl
     db.commit()
     bump(db, flow.id, node["id"], "answered")
     ctx.log("answer", f"{key} = {value[:100]}")
+    # Telefon yoki email qoldirgan mijoz — avtomatik CRM'ning birinchi bosqichiga
+    if key in ("phone", "email") and not contact.stage:
+        crm.set_stage(db, contact, crm.get_stages(account)[0]["id"], f"⚡ {flow.name}")
     if account.tg_notify_leads and account.tg_chat_id:
         notify_telegram(account, contact_card(contact, f"🎯 {flow.name}"))
     run_from(ctx, ctx.graph.next(node["id"]))

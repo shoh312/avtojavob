@@ -7,6 +7,7 @@ Instagram izohlar, Direct va story'lar uchun vizual ssenariy quruvchi.
 - Obuna tekshiruvi, lid yig'ish (telefon/email), teglar, kontaktlar bazasi + CSV
 - Har bir blokda statistika, tayyor shablonlar
 - 4 til: tojikcha, ruscha, o'zbekcha, inglizcha
+- CRM: savdo voronkasi (kanban), bitim summasi, izohlar, mijoz tarixi; lidlar avtomatik tushadi
 - Jonli chat (Inbox): barcha Direct yozishmalar, operator javobi, botni pauza qilish
 - AI yordamchi (Claude): ssenariy mos kelmagan savollarga biznes ma'lumoti asosida javob
 - Telegram xabarnomalar (yangi lidlar, javobsiz xabarlar), webhook (CRM / Make / Zapier)

@@ -98,8 +98,10 @@ def validate_graph(graph: dict) -> list[dict]:
                 err("condition_field")
         elif ntype == "action":
             op = d.get("op")
-            if op not in ("add_tag", "remove_tag", "set_field", "notify", "webhook"):
+            if op not in ("add_tag", "remove_tag", "set_field", "notify", "webhook", "set_stage"):
                 err("action_op")
+            elif op == "set_stage" and not str(d.get("stage") or "").strip():
+                err("action_stage")
             elif op == "webhook" and not str(d.get("url") or "").startswith(("https://", "http://")):
                 err("action_url")
             elif op in ("add_tag", "remove_tag") and not (d.get("tag") or "").strip():

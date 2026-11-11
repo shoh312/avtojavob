@@ -1,55 +1,13 @@
-import { useEffect, useState, type KeyboardEvent } from 'react'
-import { Download, Search, Users, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Download, Search, Users } from 'lucide-react'
 import { api, type Contact } from '../api'
 import { useAuth } from '../auth'
 import { useI18n, useTimeAgo } from '../i18n'
-import { Avatar, Empty, Modal, PageHeader, Spinner } from '../components/ui'
+import { Avatar, Empty, PageHeader, Spinner } from '../components/ui'
+import { ContactPanel, STAGE_DOT, type Stage } from './Crm'
 import { Onboarding } from './Home'
 
 type ListResp = { items: Contact[]; total: number; per_page: number; tags: string[] }
-
-function ContactModal({ contact, onClose, onSaved }: { contact: Contact; onClose: () => void; onSaved: (c: Contact) => void }) {
-  const { t } = useI18n()
-  const ago = useTimeAgo()
-  const [tag, setTag] = useState('')
-  const saveTags = async (tags: string[]) => onSaved(await api.patch<Contact>(`/api/contacts/${contact.id}`, { tags }))
-  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && tag.trim()) { saveTags([...contact.tags, tag.trim()]); setTag('') }
-  }
-  const fields = Object.entries(contact.fields)
-  return (
-    <Modal open onClose={onClose} title={<span className="flex items-center gap-3"><Avatar name={contact.username || contact.name} size={36} />{contact.username ? `@${contact.username}` : contact.name || contact.igsid}</span>}>
-      <div className="space-y-6">
-        <div>
-          <div className="label">{t('ct.tags')}</div>
-          <div className="flex flex-wrap gap-1.5">
-            {contact.tags.map(tg => (
-              <span key={tg} className="chip bg-brand-50 text-brand-700">{tg}
-                <button onClick={() => saveTags(contact.tags.filter(x => x !== tg))} className="hover:text-brand-900"><X className="h-3 w-3" /></button></span>
-            ))}
-            <input value={tag} onChange={e => setTag(e.target.value)} onKeyDown={onKey} placeholder={t('ct.add_tag')}
-              className="min-w-[120px] flex-1 rounded-full border border-dashed border-line px-3 py-1 text-[12.5px] outline-none focus:border-brand-300" />
-          </div>
-        </div>
-        <div>
-          <div className="label">{t('ct.fields')}</div>
-          {fields.length ? (
-            <dl className="divide-y divide-line rounded-xl border border-line">
-              {fields.map(([k, v]) => (
-                <div key={k} className="flex gap-4 px-3.5 py-2.5 text-[13.5px]"><dt className="w-24 shrink-0 font-mono text-ink-3">{k}</dt><dd className="min-w-0 break-words font-medium">{v}</dd></div>
-              ))}
-            </dl>
-          ) : <p className="text-[13px] text-ink-4">—</p>}
-        </div>
-        <div className="grid grid-cols-3 gap-3 text-[13px]">
-          <div><div className="text-ink-4">{t('ct.follows')}</div><div className="mt-0.5 font-semibold">{contact.follows == null ? '—' : t(contact.follows ? 'common.yes' : 'common.no')}</div></div>
-          <div><div className="text-ink-4">{t('ct.first_seen')}</div><div className="mt-0.5 font-semibold">{ago(contact.created_at)}</div></div>
-          <div><div className="text-ink-4">{t('ct.last_seen')}</div><div className="mt-0.5 font-semibold">{ago(contact.last_seen_at)}</div></div>
-        </div>
-      </div>
-    </Modal>
-  )
-}
 
 export default function Contacts() {
   const { t } = useI18n()
@@ -59,7 +17,9 @@ export default function Contacts() {
   const [tag, setTag] = useState('')
   const [page, setPage] = useState(1)
   const [data, setData] = useState<ListResp | null>(null)
-  const [open, setOpen] = useState<Contact | null>(null)
+  const [open, setOpen] = useState<number | null>(null)
+  const [stages, setStages] = useState<Stage[]>([])
+  const [reload, setReload] = useState(0)
 
   useEffect(() => {
     if (!account) return
@@ -68,7 +28,8 @@ export default function Contacts() {
       api.get<ListResp>(`/api/contacts?${p}`).then(setData).catch(() => {})
     }, 250)
     return () => clearTimeout(timer)
-  }, [account, q, tag, page])
+  }, [account, q, tag, page, reload])
+  useEffect(() => { if (account) api.get<{ stages: Stage[] }>(`/api/crm/stages?account_id=${account.id}`).then(r => setStages(r.stages)).catch(() => {}) }, [account])
 
   if (!account) return <Onboarding />
   const exportUrl = `/api/contacts/export.csv?${new URLSearchParams({ account_id: String(account.id), q, tag })}`
@@ -97,14 +58,14 @@ export default function Contacts() {
             <table className="w-full text-left text-[13.5px]">
               <thead className="border-b border-line text-[12px] font-semibold uppercase tracking-wide text-ink-4">
                 <tr>
-                  <th className="px-5 py-3">{t('ct.user')}</th><th className="px-3 py-3">{t('ct.phone')}</th>
+                  <th className="px-5 py-3">{t('ct.user')}</th><th className="px-3 py-3">{t('crm.stage')}</th><th className="px-3 py-3">{t('ct.phone')}</th>
                   <th className="hidden px-3 py-3 md:table-cell">{t('ct.email')}</th><th className="px-3 py-3">{t('ct.tags')}</th>
                   <th className="px-5 py-3 text-right">{t('ct.last_seen')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
                 {data.items.map(c => (
-                  <tr key={c.id} onClick={() => setOpen(c)} className="cursor-pointer hover:bg-soft/60">
+                  <tr key={c.id} onClick={() => setOpen(c.id)} className="cursor-pointer hover:bg-soft/60">
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-3">
                         <Avatar name={c.username || c.name} size={32} />
@@ -114,6 +75,9 @@ export default function Contacts() {
                         </div>
                       </div>
                     </td>
+                    <td className="whitespace-nowrap px-3 py-3">{(() => { const st = stages.find(x => x.id === c.stage); return st
+                      ? <span className="inline-flex items-center gap-1.5 text-[12.5px] font-medium"><span className={`h-2 w-2 rounded-full ${STAGE_DOT[st.color] || STAGE_DOT.slate}`} />{st.name}</span>
+                      : <span className="text-ink-4">—</span> })()}</td>
                     <td className="whitespace-nowrap px-3 py-3 font-mono text-[12.5px]">{c.fields.phone || '—'}</td>
                     <td className="hidden px-3 py-3 md:table-cell">{c.fields.email || '—'}</td>
                     <td className="px-3 py-3"><div className="flex flex-wrap gap-1">{c.tags.slice(0, 3).map(tg => <span key={tg} className="chip bg-brand-50 text-brand-700">{tg}</span>)}{c.tags.length > 3 && <span className="chip">+{c.tags.length - 3}</span>}</div></td>
@@ -135,8 +99,7 @@ export default function Contacts() {
           </div>
         </div>
       )}
-      {open && <ContactModal contact={open} onClose={() => setOpen(null)}
-        onSaved={c => { setOpen(c); setData(d => d && { ...d, items: d.items.map(x => (x.id === c.id ? c : x)) }) }} />}
+      {open !== null && <ContactPanel id={open} onClose={() => setOpen(null)} onChanged={() => setReload(r => r + 1)} />}
     </>
   )
 }

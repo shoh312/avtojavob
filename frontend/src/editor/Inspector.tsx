@@ -216,16 +216,32 @@ function ConditionForm({ d, set }: { d: any; set: (p: any) => void }) {
   )
 }
 
-function ActionForm({ d, set }: { d: any; set: (p: any) => void }) {
+function StageSelect({ accountId, value, onChange }: { accountId: number; value: string; onChange: (v: string) => void }) {
+  const { t } = useI18n()
+  const [stages, setStages] = useState<{ id: string; name: string }[]>([])
+  useEffect(() => { api.get<{ stages: { id: string; name: string }[] }>(`/api/crm/stages?account_id=${accountId}`).then(r => setStages(r.stages)).catch(() => {}) }, [accountId])
+  return (
+    <Field label={t('crm.stage')}>
+      <select className="input" value={value} onChange={e => onChange(e.target.value)}>
+        <option value="">—</option>
+        {stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+      </select>
+    </Field>
+  )
+}
+
+function ActionForm({ d, set, accountId }: { d: any; set: (p: any) => void; accountId: number }) {
   const { t } = useI18n()
   return (
     <div className="space-y-5">
       <Field label={t('insp.op')}>
         <select className="input" value={d.op || 'add_tag'} onChange={e => set({ op: e.target.value })}>
-          {['add_tag', 'remove_tag', 'set_field', 'notify', 'webhook'].map(o => <option key={o} value={o}>{t(`insp.op.${o}` as TKey)}</option>)}
+          {['add_tag', 'remove_tag', 'set_field', 'set_stage', 'notify', 'webhook'].map(o => <option key={o} value={o}>{t(`insp.op.${o}` as TKey)}</option>)}
         </select>
       </Field>
-      {d.op === 'notify' ? (
+      {d.op === 'set_stage' ? (
+        <StageSelect accountId={accountId} value={d.stage || ''} onChange={v => set({ stage: v })} />
+      ) : d.op === 'notify' ? (
         <>
           <Field label={t('insp.notify_text')}><input className="input" value={d.text || ''} placeholder="🔥 Yangi buyurtma" onChange={e => set({ text: e.target.value })} /></Field>
           <Note>{t('insp.notify_hint')}</Note>
@@ -285,7 +301,7 @@ export default function Inspector({ node, accountId, onChange, onDelete, onClose
         {node.type === 'message' && <MessageForm d={d} set={onChange} />}
         {node.type === 'question' && <QuestionForm d={d} set={onChange} />}
         {node.type === 'condition' && <ConditionForm d={d} set={onChange} />}
-        {node.type === 'action' && <ActionForm d={d} set={onChange} />}
+        {node.type === 'action' && <ActionForm d={d} set={onChange} accountId={accountId} />}
         {node.type === 'delay' && <DelayForm d={d} set={onChange} />}
       </div>
       {node.type !== 'trigger' && (

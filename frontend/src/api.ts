@@ -54,6 +54,7 @@ export type Template = { key: string; icon: string; name: string; description: s
 export type Contact = {
   id: number; igsid: string; username: string; name: string; tags: string[]; fields: Record<string, string>
   follows: boolean | null; last_seen_at: string; created_at: string
+  stage?: string | null; deal_value?: number; last_message_preview?: string; last_message_at?: string | null
 }
 export type Media = { id: string; caption: string; thumbnail: string | null; type: string; timestamp: string }
 export type Stats = { sent_24h: number; sent_7d: number; contacts: number; contacts_7d: number; flows_active: number; flows_total: number; runs_total: number }

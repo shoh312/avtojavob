@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { Activity, BarChart3, Blocks, Check, ChevronsUpDown, CreditCard, Home, Inbox, Instagram, LogOut, MailWarning, Megaphone, Menu, Plus, Settings, SlidersHorizontal, UserCog, Users, Workflow, X } from 'lucide-react'
+import { Activity, BarChart3, Blocks, KanbanSquare, Check, ChevronsUpDown, CreditCard, Home, Inbox, Instagram, LogOut, MailWarning, Megaphone, Menu, Plus, Settings, SlidersHorizontal, UserCog, Users, Workflow, X } from 'lucide-react'
 import { useAuth } from '../auth'
 import { useI18n, type TKey } from '../i18n'
 import { api } from '../api'
@@ -11,6 +11,7 @@ import { PlanBadge, PlanBanner, planStatus } from './Plan'
 const NAV: { to: string; key: TKey; icon: typeof Home; end?: boolean }[] = [
   { to: '/app', key: 'nav.home', icon: Home, end: true },
   { to: '/app/inbox', key: 'nav.inbox', icon: Inbox },
+  { to: '/app/crm', key: 'nav.crm', icon: KanbanSquare },
   { to: '/app/flows', key: 'nav.flows', icon: Workflow },
   { to: '/app/contacts', key: 'nav.contacts', icon: Users },
   { to: '/app/broadcasts', key: 'nav.broadcasts', icon: Megaphone },
@@ -158,7 +159,7 @@ export default function AppLayout() {
       <main className="lg:pl-[260px]">
         {loc.pathname.startsWith('/app/inbox')
           ? <Outlet />
-          : <div className="mx-auto max-w-6xl px-4 py-8 sm:px-8 sm:py-10"><PlanBanner /><VerifyBanner /><Outlet /></div>}
+          : <div className={`${loc.pathname.startsWith('/app/crm') ? '' : 'mx-auto max-w-6xl '}px-4 py-8 sm:px-8 sm:py-10`}><PlanBanner /><VerifyBanner /><Outlet /></div>}
       </main>
     </div>
   )

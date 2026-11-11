@@ -158,7 +158,7 @@ export const ActionNode = memo(({ id, data, selected }: NodeProps) => {
   const d = data as any
   const label = t(`insp.op.${d.op || 'add_tag'}` as TKey)
   const value = d.op === 'set_field' ? `${d.field || '…'} = ${d.value || '…'}`
-    : d.op === 'notify' ? (d.text || 'Telegram') : d.op === 'webhook' ? (d.url || '…').replace(/^https?:\/\//, '').slice(0, 30) : d.tag || '…'
+    : d.op === 'set_stage' ? `→ ${d.stage || '…'}` : d.op === 'notify' ? (d.text || 'Telegram') : d.op === 'webhook' ? (d.url || '…').replace(/^https?:\/\//, '').slice(0, 30) : d.tag || '…'
   return (
     <Shell id={id} type="action" selected={!!selected} footer={<OutRow id="out">{t('node.next')}</OutRow>}>
       <div className="text-[12px] text-ink-3">{label}</div>

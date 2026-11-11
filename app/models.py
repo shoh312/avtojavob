@@ -63,6 +63,8 @@ class IGAccount(Base):
     tg_chat_title: Mapped[str] = mapped_column(String(255), default="")
     tg_notify_leads: Mapped[bool] = mapped_column(Boolean, default=True)
     tg_notify_inbox: Mapped[bool] = mapped_column(Boolean, default=False)
+    # CRM bosqichlari (bo'sh — standart bosqichlar egasining tilida)
+    crm_stages_json: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     user: Mapped[User] = relationship(back_populates="accounts")
@@ -127,6 +129,10 @@ class Contact(Base):
     unread: Mapped[int] = mapped_column(Integer, default=0)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     last_message_preview: Mapped[str] = mapped_column(String(255), default="")
+    # CRM
+    stage: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    deal_value: Mapped[int] = mapped_column(Integer, default=0)
+    stage_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
@@ -289,3 +295,17 @@ class Broadcast(Base):
     failed: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class Note(Base):
+    """CRM izohlari va bosqich o'zgarishlari tarixi."""
+
+    __tablename__ = "notes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("ig_accounts.id", ondelete="CASCADE"), index=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(10), default="note")  # note | stage
+    author: Mapped[str] = mapped_column(String(120), default="")
+    text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

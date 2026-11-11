@@ -552,3 +552,52 @@ def test_gemini_provider(client, monkeypatch):
     monkeypatch.setattr(services._http, "post", lambda *a, **k: Resp(200, {"candidates": [{"finishReason": "SAFETY"}]}))
     with SessionLocal() as db:
         assert services.ai_reply(db, "x", [{"role": "user", "content": "?"}]) is None
+
+
+def test_crm_pipeline(client):
+    _login(client, "a@b.tj", "newpass123")
+    acc = S["acc"]
+    board = client.get(f"/api/crm?account_id={acc}").json()
+    assert [s["id"] for s in board["stages"]] == ["new", "contacted", "negotiation", "won", "lost"]
+    assert board["stages"][0]["name"] == "Yangi"  # foydalanuvchi tili: uz
+    # oldingi testda telefon qoldirgan mijoz avtomatik 'Yangi'da
+    card = next(c for c in board["cards"] if c["fields"].get("phone"))
+    assert card["stage"] == "new" and board["totals"]["new"]["count"] >= 1
+
+    cid = card["id"]
+    r = client.patch(f"/api/contacts/{cid}", json={"stage": "won", "deal_value": 350}, headers=H).json()
+    assert r["stage"] == "won" and r["deal_value"] == 350
+    assert client.patch(f"/api/contacts/{cid}", json={"stage": "nope"}, headers=H).json()["error"] == "bad_stage"
+    tl = client.post(f"/api/contacts/{cid}/notes", json={"text": "Ertaga qo'ng'iroq qilish"}, headers=H).json()
+    kinds = [i["type"] for i in tl["items"]]
+    assert "note" in kinds and "stage" in kinds and "message" in kinds
+    stage_note = next(i for i in tl["items"] if i["type"] == "stage")
+    assert stage_note["text"] == "Yangi → Sotildi"
+    board = client.get(f"/api/crm?account_id={acc}").json()
+    assert board["totals"]["won"] == {"count": 1, "sum": 350}
+    assert next(c for c in board["cards"] if c["id"] == cid)["notes"] == 1
+
+    # bosqichlarni o'zgartirish: 'won' o'chirilsa — mijoz birinchi bosqichga o'tadi
+    new_stages = [{"id": "new", "name": "Lead", "color": "sky", "type": "open"},
+                  {"name": "To'landi", "color": "emerald", "type": "won"}]
+    r = client.put("/api/crm/stages", json={"account_id": acc, "stages": new_stages}, headers=H).json()
+    assert len(r["stages"]) == 2 and r["stages"][1]["id"]
+    assert client.get(f"/api/crm?account_id={acc}").json()["totals"]["new"]["sum"] >= 350
+    assert client.put("/api/crm/stages", json={"account_id": acc, "stages": []}, headers=H).json()["error"] == "stages_count"
+
+    # ssenariy amali: set_stage (boshqa faol ssenariylar to'xtatiladi)
+    for f in client.get(f"/api/flows?account_id={acc}").json()["items"]:
+        client.put(f"/api/flows/{f['id']}", json={"active": False}, headers=H)
+    flow = create(client, "price")
+    g = flow["graph"]
+    msg = node(g, "message")
+    act = {"id": "a1", "type": "action", "position": {"x": 0, "y": 0}, "data": {"op": "set_stage", "stage": r["stages"][1]["id"]}}
+    g["nodes"].append(act)
+    g["edges"].append({"id": "e9", "source": msg["id"], "sourceHandle": "out", "target": "a1"})
+    activate(client, flow, g)
+    hook(client, comment("c-crm", "narx", from_id="crm-user"))
+    with SessionLocal() as db:
+        assert db.query(Contact).filter_by(igsid="crm-user").one().stage == r["stages"][1]["id"]
+    bad = client.put(f"/api/flows/{flow['id']}", json={"graph": {**g, "nodes": [*g["nodes"][:-1], {**act, "data": {"op": "set_stage"}}]}}, headers=H).json()
+    assert any(e["code"] == "action_stage" for e in bad["errors"])
+    assert "stage" in client.get(f"/api/contacts/export.csv?account_id={acc}").text.splitlines()[0]

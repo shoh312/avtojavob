@@ -24,14 +24,14 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import instagram as ig
-from . import services
+from . import crm, services
 from .config import settings
 from .db import get_db, init_db
 from .engine import (broadcast_audience, log_event, process_payload, record_message, refresh_expiring_tokens,
                      resubscribe_all, run_broadcast, run_due_jobs)
 from .flows import blank_graph, build_template, list_templates, trigger_of, validate_graph
-from .models import (LANGS, SEND_KINDS, Broadcast, Contact, EventLog, Flow, IGAccount, Message, NodeStat, PlanGrant,
-                     User, utcnow)
+from .models import (LANGS, SEND_KINDS, Broadcast, Contact, EventLog, Flow, IGAccount, Message, NodeStat, Note,
+                     PlanGrant, User, utcnow)
 from .plans import (PLANS, TRIAL_DAYS, accounts_limit, get_setting, is_active, plan_json, plans_public,
                     set_setting)
 from .security import (decrypt, encrypt, hash_password, parse_signed_request, verify_password,
@@ -181,7 +181,8 @@ def flow_summary(f: Flow) -> dict:
 def contact_json(c: Contact) -> dict:
     return {"id": c.id, "igsid": c.igsid, "username": c.username, "name": c.name, "tags": c.tags,
             "fields": c.fields, "follows": c.follows, "last_seen_at": iso(c.last_seen_at),
-            "created_at": iso(c.created_at)}
+            "created_at": iso(c.created_at), "stage": c.stage, "deal_value": c.deal_value or 0,
+            "last_message_preview": c.last_message_preview, "last_message_at": iso(c.last_message_at)}
 
 
 def detect_lang(request: Request) -> str:
@@ -516,7 +517,17 @@ def contact_update(contact_id: int, body: dict = Body(...), user: User = Depends
         c.fields = {str(k)[:30]: str(v)[:500] for k, v in body["fields"].items()}
     if "name" in body:
         c.name = str(body["name"] or "")[:255]
+    if "deal_value" in body:
+        try:
+            c.deal_value = max(0, min(int(body["deal_value"] or 0), 10**12))
+        except (TypeError, ValueError):
+            err("bad_number")
     db.commit()
+    if "stage" in body:
+        stage = body["stage"] or None
+        if stage is not None and not crm.stage_by_id(c.account, stage):
+            err("bad_stage")
+        crm.set_stage(db, c, stage, user.name or user.email)
     return contact_json(c)
 
 
@@ -529,10 +540,12 @@ def contacts_export(account_id: int, q: str = "", tag: str = "", user: User = De
     buf = io.StringIO()
     buf.write("﻿")  # Excel UTF-8 ni to'g'ri ochishi uchun
     w = csv.writer(buf)
-    w.writerow(["username", "name", "tags", "follows", "first_seen", "last_seen", *keys])
+    stages = {s["id"]: s["name"] for s in crm.get_stages(acc)}
+    w.writerow(["username", "name", "stage", "deal_value", "tags", "follows", "first_seen", "last_seen", *keys])
     for c in rows:
-        w.writerow([c.username, c.name, ", ".join(c.tags), "" if c.follows is None else int(c.follows),
-                    iso(c.created_at), iso(c.last_seen_at), *[c.fields.get(k, "") for k in keys]])
+        w.writerow([c.username, c.name, stages.get(c.stage or "", ""), c.deal_value or 0, ", ".join(c.tags),
+                    "" if c.follows is None else int(c.follows), iso(c.created_at), iso(c.last_seen_at),
+                    *[c.fields.get(k, "") for k in keys]])
     buf.seek(0)
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
                              headers={"Content-Disposition": f'attachment; filename="contacts-{acc.username}.csv"'})
@@ -1190,6 +1203,68 @@ def broadcasts_create(body: dict = Body(...), user: User = Depends(current_user)
     db.commit()
     threading.Thread(target=run_broadcast, args=(b.id,), daemon=True).start()
     return _broadcast_json(b)
+
+
+# ---------------------------------------------------------------- CRM
+
+@app.get("/api/crm")
+def crm_board(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    stages = crm.get_stages(acc)
+    ids = [s["id"] for s in stages]
+    cards = db.scalars(select(Contact).where(Contact.account_id == acc.id, Contact.stage.in_(ids))
+                       .order_by(Contact.stage_changed_at.desc()).limit(1000)).all()
+    notes = dict(db.execute(select(Note.contact_id, func.count(Note.id)).where(
+        Note.account_id == acc.id, Note.kind == "note").group_by(Note.contact_id)).all())
+    totals = {sid: {"count": 0, "sum": 0} for sid in ids}
+    for c in cards:
+        totals[c.stage]["count"] += 1
+        totals[c.stage]["sum"] += c.deal_value or 0
+    return {"stages": stages, "totals": totals,
+            "cards": [{**contact_json(c), "notes": notes.get(c.id, 0)} for c in cards]}
+
+
+@app.get("/api/crm/stages")
+def crm_stages(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return {"stages": crm.get_stages(owned_account(db, user, account_id))}
+
+
+@app.put("/api/crm/stages")
+def crm_stages_save(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, int(body.get("account_id") or 0))
+    stages = crm.validate_stages(body.get("stages"))
+    if isinstance(stages, str):
+        err(stages)
+    ids = {s["id"] for s in stages}
+    # O'chirilgan bosqichdagi mijozlar birinchi bosqichga o'tadi
+    for c in db.scalars(select(Contact).where(Contact.account_id == acc.id, Contact.stage.is_not(None))):
+        if c.stage not in ids:
+            c.stage = stages[0]["id"]
+    acc.crm_stages_json = json.dumps(stages, ensure_ascii=False)
+    db.commit()
+    return {"stages": stages}
+
+
+@app.get("/api/contacts/{contact_id}/timeline")
+def contact_timeline(contact_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    c = _owned_contact(db, user, contact_id)
+    notes = db.scalars(select(Note).where(Note.contact_id == c.id).order_by(Note.id.desc()).limit(100)).all()
+    msgs = db.scalars(select(Message).where(Message.contact_id == c.id).order_by(Message.id.desc()).limit(50)).all()
+    items = [{"type": n.kind, "id": f"n{n.id}", "text": n.text, "author": n.author, "created_at": iso(n.created_at)} for n in notes]
+    items += [{"type": "message", "id": f"m{m.id}", "text": m.text, "direction": m.direction, "source": m.source,
+               "created_at": iso(m.created_at)} for m in msgs]
+    items.sort(key=lambda x: x["created_at"] or "", reverse=True)
+    return {"contact": contact_json(c), "stages": crm.get_stages(c.account), "items": items[:120]}
+
+
+@app.post("/api/contacts/{contact_id}/notes")
+def contact_note(contact_id: int, body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    c = _owned_contact(db, user, contact_id)
+    text = str(body.get("text") or "").strip()
+    if not text:
+        err("empty")
+    crm.add_note(db, c, text, user.name or user.email)
+    return contact_timeline(contact_id, user, db)
 
 
 # ---------------------------------------------------------------- admin: platforma sozlamalari, parol
