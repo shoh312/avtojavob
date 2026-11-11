@@ -177,6 +177,19 @@ else
 fi
 
 # ---------------------------------------------------------------------
+step "Kunlik zaxira nusxa (backup)"
+mkdir -p /var/backups/avtojavob
+chmod 700 /var/backups/avtojavob
+cat > /etc/cron.daily/avtojavob-backup <<EOF
+#!/bin/sh
+# ChatFlow bazasining kunlik nusxasi; 14 kundan eskilari o'chiriladi
+cd /tmp && runuser -u postgres -- pg_dump ${DB_NAME} | gzip > /var/backups/avtojavob/db-\$(date +%F).sql.gz
+find /var/backups/avtojavob -name 'db-*.sql.gz' -mtime +14 -delete
+EOF
+chmod 755 /etc/cron.daily/avtojavob-backup
+ok "Har kuni: /var/backups/avtojavob (14 kun saqlanadi)"
+
+# ---------------------------------------------------------------------
 step "7/8  Nginx va SSL (HTTPS)"
 NGX="/etc/nginx/sites-available/${SERVICE}"
 CERT="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"

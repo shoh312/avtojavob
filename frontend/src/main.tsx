@@ -17,6 +17,10 @@ import Accounts from './pages/Accounts'
 import Settings from './pages/Settings'
 import FlowEditor from './editor/FlowEditor'
 import Billing from './pages/Billing'
+import Inbox from './pages/Inbox'
+import Broadcasts from './pages/Broadcasts'
+import Integrations from './pages/Integrations'
+import { Forgot, Reset } from './pages/Recover'
 import AdminOverviewPage from './pages/admin/AdminOverview'
 import AdminUsers from './pages/admin/AdminUsers'
 import AdminSettings from './pages/admin/AdminSettings'
@@ -51,6 +55,8 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/" element={<Landing />} />
               <Route path="/login" element={<GuestOnly><AuthPage mode="login" /></GuestOnly>} />
               <Route path="/register" element={<GuestOnly><AuthPage mode="register" /></GuestOnly>} />
+              <Route path="/forgot" element={<GuestOnly><Forgot /></GuestOnly>} />
+              <Route path="/reset" element={<Reset />} />
               <Route path="/app/flows/:id" element={<Protected><FlowEditor /></Protected>} />
               <Route path="/app" element={<Protected><AppLayout /></Protected>}>
                 <Route index element={<Home />} />
@@ -60,6 +66,9 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="accounts" element={<Accounts />} />
                 <Route path="settings" element={<Settings />} />
                 <Route path="billing" element={<Billing />} />
+                <Route path="inbox" element={<Inbox />} />
+                <Route path="broadcasts" element={<Broadcasts />} />
+                <Route path="integrations" element={<Integrations />} />
                 <Route path="admin" element={<AdminOnly><AdminOverviewPage /></AdminOnly>} />
                 <Route path="admin/users" element={<AdminOnly><AdminUsers /></AdminOnly>} />
                 <Route path="admin/settings" element={<AdminOnly><AdminSettings /></AdminOnly>} />

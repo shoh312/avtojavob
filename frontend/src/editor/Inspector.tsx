@@ -222,10 +222,20 @@ function ActionForm({ d, set }: { d: any; set: (p: any) => void }) {
     <div className="space-y-5">
       <Field label={t('insp.op')}>
         <select className="input" value={d.op || 'add_tag'} onChange={e => set({ op: e.target.value })}>
-          {['add_tag', 'remove_tag', 'set_field'].map(o => <option key={o} value={o}>{t(`insp.op.${o}` as TKey)}</option>)}
+          {['add_tag', 'remove_tag', 'set_field', 'notify', 'webhook'].map(o => <option key={o} value={o}>{t(`insp.op.${o}` as TKey)}</option>)}
         </select>
       </Field>
-      {d.op === 'set_field' ? (
+      {d.op === 'notify' ? (
+        <>
+          <Field label={t('insp.notify_text')}><input className="input" value={d.text || ''} placeholder="🔥 Yangi buyurtma" onChange={e => set({ text: e.target.value })} /></Field>
+          <Note>{t('insp.notify_hint')}</Note>
+        </>
+      ) : d.op === 'webhook' ? (
+        <>
+          <Field label={t('insp.webhook_url')}><input className="input font-mono text-[13px]" value={d.url || ''} placeholder="https://hook.make.com/…" onChange={e => set({ url: e.target.value })} /></Field>
+          <Note>{t('insp.webhook_hint')}</Note>
+        </>
+      ) : d.op === 'set_field' ? (
         <>
           <Field label={t('insp.field')}><input className="input font-mono" value={d.field || ''} placeholder="status" onChange={e => set({ field: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '') })} /></Field>
           <Field label={t('insp.value')}><input className="input" value={d.value || ''} onChange={e => set({ value: e.target.value })} /></Field>

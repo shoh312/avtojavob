@@ -359,3 +359,152 @@ def test_series_and_account_limit(client):
     from app.models import User
     with SessionLocal() as db:
         assert accounts_limit(db.query(User).filter_by(email="a@b.tj").one()) == 1
+
+
+# ------------------------------------------------------------------ jonli chat, AI, Telegram, rassilka, email
+
+def _login(client, email, pw="12345678"):
+    client.post("/api/auth/logout", headers=H)
+    r = client.post("/api/auth/login", json={"email": email, "password": pw}, headers=H)
+    assert r.status_code == 200, r.text
+
+
+def test_inbox_and_agent_reply(client):
+    _login(client, "a@b.tj")
+    calls.clear()
+    hook(client, text_msg(LONG_MID + "inbox1", "Salom, savolim bor"))
+    hook(client, text_msg(LONG_MID + "inbox1", "Salom, savolim bor"))  # takroriy — bir marta yoziladi
+    inbox = client.get(f"/api/inbox?account_id={S['acc']}").json()
+    conv = inbox["items"][0]
+    assert conv["preview"] == "Salom, savolim bor" and conv["unread"] >= 1 and conv["can_message"]
+    thread = client.get(f"/api/inbox/{conv['id']}").json()
+    texts = [m["text"] for m in thread["messages"]]
+    assert texts.count("Salom, savolim bor") == 1
+    assert any(m["source"] == "flow" and m["direction"] == "out" for m in thread["messages"])
+    assert client.get(f"/api/inbox?account_id={S['acc']}").json()["items"][0]["unread"] == 0
+
+    calls.clear()
+    r = client.post(f"/api/inbox/{conv['id']}/send", json={"text": "Operator javobi"}, headers=H).json()
+    assert calls == [("dm", "999", {"text": "Operator javobi"})]
+    assert r["contact"]["bot_paused"] and r["messages"][-1]["source"] == "agent"
+
+    # bot pauzada — ssenariy ishlamaydi, lekin xabar tarixga yoziladi
+    calls.clear()
+    hook(client, text_msg(LONG_MID + "inbox2", "buyurtma"))
+    assert calls == []
+    assert client.get(f"/api/inbox/{conv['id']}").json()["messages"][-1]["text"] == "buyurtma"
+    client.post(f"/api/inbox/{conv['id']}/pause", json={"minutes": 0}, headers=H)
+    S["contact"] = conv["id"]
+
+
+def test_ai_assistant(client, monkeypatch):
+    from app import services
+    acc = S["acc"]
+    r = client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": True, "ai_prompt": "Dokon: kiyimlar"},
+                   headers=H).json()
+    assert r["ai_enabled"] and r["ai_available"] is False
+    assert client.post(f"/api/accounts/{acc}/ai/test", json={"message": "hi"}, headers=H).json()["error"] == "ai_unavailable"
+
+    seen = {}
+    monkeypatch.setattr(services, "ai_available", lambda db: True)
+
+    def fake_reply(db, prompt, history):
+        seen["prompt"], seen["history"] = prompt, history
+        return "Ish vaqti 9:00–18:00"
+    monkeypatch.setattr(services, "ai_reply", fake_reply)
+    calls.clear()
+    hook(client, text_msg(LONG_MID + "ai1", "Soat nechagacha ishlaysiz?"))  # hech bir ssenariy mos emas
+    assert calls == [("dm", "999", {"text": "Ish vaqti 9:00–18:00"})]
+    assert seen["prompt"] == "Dokon: kiyimlar"
+    assert seen["history"][-1] == {"role": "user", "content": "Soat nechagacha ishlaysiz?"}
+
+    monkeypatch.setattr(services, "ai_reply", lambda db, p, h: None)  # rad etildi / xato
+    calls.clear()
+    hook(client, text_msg(LONG_MID + "ai2", "???"))
+    assert calls == []
+    client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": False}, headers=H)
+
+
+def test_telegram_notify_and_webhook(client, monkeypatch):
+    from app import services
+    sent = []
+    monkeypatch.setattr(services, "telegram_connect", lambda token: ("777", "Mening chatim"))
+    monkeypatch.setattr(services, "_tg", lambda token, method, **p: sent.append((method, p)) or {})
+    assert client.post(f"/api/accounts/{S['acc']}/telegram", json={"bot_token": "bad"}, headers=H).json()["error"] == "tg_invalid"
+    r = client.post(f"/api/accounts/{S['acc']}/telegram", json={"bot_token": "123:ABC"}, headers=H).json()
+    assert r["telegram"] == {"connected": True, "chat": "Mening chatim"} and sent[-1][0] == "sendMessage"
+
+    # lid saqlanganda Telegram'ga kartochka
+    flow = create(client, "lead")
+    activate(client, flow)
+    sent.clear()
+    hook(client, text_msg(LONG_MID + "tg1", "buyurtma"))
+    hook(client, text_msg(LONG_MID + "tg2", "+992 90 000 00 00"))
+    assert sent and "+992 90 000 00 00" in sent[-1][1]["text"] and sent[-1][1]["chat_id"] == "777"
+    client.put(f"/api/flows/{flow['id']}", json={"active": False}, headers=H)
+
+    # webhook: ichki tarmoq bloklanadi
+    assert services.safe_url("http://127.0.0.1:8000/x") is False
+    assert services.safe_url("http://169.254.169.254/latest") is False
+    assert services.safe_url("ftp://example.com") is False
+    assert services.post_webhook("http://localhost/x", {}) == "blocked_url"
+
+
+def test_broadcast(client):
+    from app.engine import run_broadcast
+    import app.main as main_mod
+    started = []
+
+    class FakeThread:
+        def __init__(self, target, args, daemon):
+            self.args = args
+
+        def start(self):
+            started.append(self.args)
+    orig = main_mod.threading.Thread
+    main_mod.threading.Thread = FakeThread
+    try:
+        aud = client.get(f"/api/broadcasts/audience?account_id={S['acc']}").json()
+        assert aud["eligible"] >= 1
+        r = client.post("/api/broadcasts", json={"account_id": S["acc"], "text": "Aksiya!", "tag": "no-such-tag"}, headers=H)
+        assert r.json()["error"] == "no_audience"
+        b = client.post("/api/broadcasts", json={"account_id": S["acc"], "text": "Aksiya {username}!",
+                                                 "buttons": [{"title": "Shop", "url": "https://shop.tj"}]}, headers=H).json()
+        assert b["status"] == "running" and b["total"] == aud["eligible"] and started
+    finally:
+        main_mod.threading.Thread = orig
+    calls.clear()
+    run_broadcast(b["id"])
+    assert calls and calls[0][2]["attachment"]["payload"]["text"] == "Aksiya @mijoz!"
+    items = client.get(f"/api/broadcasts?account_id={S['acc']}").json()["items"]
+    assert items[0]["status"] == "done" and items[0]["sent"] == aud["eligible"]
+
+
+def test_password_reset_and_verify(client, monkeypatch):
+    from app import services
+    mails = []
+    monkeypatch.setattr(services, "send_email", lambda cfg, to, subj, text, html=None: mails.append((to, text)))
+    assert client.post("/api/auth/forgot", json={"email": "a@b.tj"}, headers=H).json() == {"sent": False}
+
+    _login(client, "boss@chatflow.tj")
+    r = client.put("/api/admin/platform", json={"smtp_host": "smtp.test", "smtp_from": "ChatFlow <no-reply@test>",
+                                               "smtp_password": "secret", "anthropic_api_key": "sk-test"}, headers=H).json()
+    assert r["smtp_password_set"] and r["anthropic_api_key_set"] and "secret" not in r.values()
+    assert client.get("/api/auth/config").json()["email"] is True
+
+    client.post("/api/auth/logout", headers=H)
+    assert client.post("/api/auth/forgot", json={"email": "a@b.tj"}, headers=H).json() == {"sent": True}
+    to, text = mails[-1]
+    token = text.split("token=")[1].strip()
+    assert client.post("/api/auth/reset", json={"token": token, "password": "short"}, headers=H).json()["error"] == "password_short"
+    r = client.post("/api/auth/reset", json={"token": token, "password": "newpass123"}, headers=H).json()
+    assert r["user"]["email"] == "a@b.tj"
+    # havola bir martalik
+    assert client.post("/api/auth/reset", json={"token": token, "password": "another123"}, headers=H).json()["error"] == "token_invalid"
+    _login(client, "a@b.tj", "newpass123")
+
+    client.post("/api/auth/verify/send", headers=H)
+    vtoken = mails[-1][1].split("token=")[1].strip()
+    r = client.get(f"/verify-email?token={vtoken}", follow_redirects=False)
+    assert r.headers["location"] == "/app?verified=1" and client.get("/api/me").json()["user"]["email_verified"]
+    assert client.get("/health").json() == {"ok": True}

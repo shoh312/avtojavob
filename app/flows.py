@@ -11,7 +11,7 @@ Blok turlari va chiqishlari (sourceHandle):
   question   data: text, field(phone|email|name|custom), custom_key,
                    validate(any|phone|email|number), error_text                   -> "out"
   condition  data: check(follows|has_tag|has_field), tag, field                  -> "yes", "no"
-  action     data: op(add_tag|remove_tag|set_field), tag, field, value           -> "out"
+  action     data: op(add_tag|remove_tag|set_field|notify|webhook), tag, field, value, text, url -> "out"
   delay      data: amount, unit(minutes|hours)                                    -> "out"
 """
 
@@ -98,8 +98,10 @@ def validate_graph(graph: dict) -> list[dict]:
                 err("condition_field")
         elif ntype == "action":
             op = d.get("op")
-            if op not in ("add_tag", "remove_tag", "set_field"):
+            if op not in ("add_tag", "remove_tag", "set_field", "notify", "webhook"):
                 err("action_op")
+            elif op == "webhook" and not str(d.get("url") or "").startswith(("https://", "http://")):
+                err("action_url")
             elif op in ("add_tag", "remove_tag") and not (d.get("tag") or "").strip():
                 err("action_tag")
             elif op == "set_field" and not FIELD_KEY.match((d.get("field") or "").strip().lower()):

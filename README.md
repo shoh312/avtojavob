@@ -7,6 +7,11 @@ Instagram izohlar, Direct va story'lar uchun vizual ssenariy quruvchi.
 - Obuna tekshiruvi, lid yig'ish (telefon/email), teglar, kontaktlar bazasi + CSV
 - Har bir blokda statistika, tayyor shablonlar
 - 4 til: tojikcha, ruscha, o'zbekcha, inglizcha
+- Jonli chat (Inbox): barcha Direct yozishmalar, operator javobi, botni pauza qilish
+- AI yordamchi (Claude): ssenariy mos kelmagan savollarga biznes ma'lumoti asosida javob
+- Telegram xabarnomalar (yangi lidlar, javobsiz xabarlar), webhook (CRM / Make / Zapier)
+- Rassilka (24 soat qoidasiga rioya qilgan holda), email tasdiqlash, parolni tiklash, Google orqali kirish
+- Tariflar (7 kun sinov, Pro, Business), admin panel, kunlik avtomatik backup
 
 Texnologiya: Python (FastAPI, SQLAlchemy, PostgreSQL) + React (Vite, Tailwind, React Flow).
 Frontend build `app/web` papkasida (repoda) — serverda Node.js kerak emas.

@@ -30,6 +30,8 @@ class User(Base):
     plan: Mapped[str] = mapped_column(String(20), default="trial")
     plan_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    google_sub: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     accounts: Mapped[list["IGAccount"]] = relationship(
@@ -52,6 +54,15 @@ class IGAccount(Base):
     access_token_enc: Mapped[str] = mapped_column(Text)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # AI yordamchi: hech bir ssenariy mos kelmagan Direct xabarlarga javob beradi
+    ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_prompt: Mapped[str] = mapped_column(Text, default="")
+    # Telegram xabarnomalar (foydalanuvchining o'z boti)
+    tg_bot_token_enc: Mapped[str] = mapped_column(Text, default="")
+    tg_chat_id: Mapped[str] = mapped_column(String(64), default="")
+    tg_chat_title: Mapped[str] = mapped_column(String(255), default="")
+    tg_notify_leads: Mapped[bool] = mapped_column(Boolean, default=True)
+    tg_notify_inbox: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     user: Mapped[User] = relationship(back_populates="accounts")
@@ -111,6 +122,11 @@ class Contact(Base):
     # Instagram 24 soat qoidasi: shu vaqtdan keyin 24 soat ichida xabar yuborish mumkin
     last_inbound_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     profile_checked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Jonli chat
+    bot_paused_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    unread: Mapped[int] = mapped_column(Integer, default=0)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_message_preview: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
@@ -148,6 +164,9 @@ class Contact(Base):
 
     def can_message(self) -> bool:
         return bool(self.last_inbound_at and utcnow() - self.last_inbound_at < timedelta(hours=24))
+
+    def bot_paused(self) -> bool:
+        return bool(self.bot_paused_until and self.bot_paused_until > utcnow())
 
 
 class FlowSession(Base):
@@ -198,7 +217,7 @@ class ProcessedEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
-SEND_KINDS = ("comment_reply", "private_reply", "dm_reply")
+SEND_KINDS = ("comment_reply", "private_reply", "dm_reply", "ai_reply", "agent_reply", "broadcast")
 
 
 class EventLog(Base):
@@ -239,3 +258,34 @@ class AppSetting(Base):
 
     key: Mapped[str] = mapped_column(String(60), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
+
+
+class Message(Base):
+    """Jonli chat tarixi: kiruvchi va chiquvchi xabarlar."""
+
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("ig_accounts.id", ondelete="CASCADE"), index=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), index=True)
+    direction: Mapped[str] = mapped_column(String(4))  # in | out
+    # user | comment | button | story | flow | ai | agent | broadcast
+    source: Mapped[str] = mapped_column(String(20), default="user")
+    text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class Broadcast(Base):
+    __tablename__ = "broadcasts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("ig_accounts.id", ondelete="CASCADE"), index=True)
+    text: Mapped[str] = mapped_column(Text, default="")
+    buttons_json: Mapped[str] = mapped_column(Text, default="[]")
+    tag: Mapped[str] = mapped_column(String(40), default="")
+    status: Mapped[str] = mapped_column(String(20), default="running")  # running | done | limited | interrupted
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    sent: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

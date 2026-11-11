@@ -15,6 +15,7 @@ function UserModal({ id, onClose, onChanged }: { id: number; onClose: () => void
   const [u, setU] = useState<AdminUserDetail | null>(null)
   const [form, setForm] = useState({ plan: 'pro' as PlanKey, days: 30, amount: 199, note: '' })
   const [busy, setBusy] = useState(false)
+  const [pw, setPw] = useState('')
   useEffect(() => { api.get<AdminUserDetail>(`/api/admin/users/${id}`).then(setU).catch(() => {}) }, [id])
   const date = (iso?: string | null) => iso ? new Date(iso).toLocaleDateString(lang === 'tj' ? 'ru' : lang) : '—'
 
@@ -90,6 +91,11 @@ function UserModal({ id, onClose, onChanged }: { id: number; onClose: () => void
                 onClick={() => act(() => api.post(`/api/admin/users/${u.id}/grant`, form), t('adm.granted'))}>
                 <ShieldCheck className="h-4 w-4" />{t('adm.grant_btn')}
               </Button>
+            </div>
+            <div className="flex gap-2">
+              <input type="text" className="input h-9 flex-1 py-1.5" placeholder={t('adm.set_password')} value={pw} onChange={e => setPw(e.target.value)} />
+              <Button variant="secondary" size="sm" disabled={busy || pw.length < 8}
+                onClick={async () => { await api.post(`/api/admin/users/${u.id}/password`, { password: pw }); setPw(''); toast(t('adm.password_set')) }}>{t('common.save')}</Button>
             </div>
             <div className="flex gap-2">
               <Button variant="secondary" size="sm" className="flex-1" disabled={busy}

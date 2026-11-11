@@ -1,17 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Activity, BarChart3, Check, ChevronsUpDown, CreditCard, Home, Instagram, LogOut, Menu, Plus, Settings, SlidersHorizontal, UserCog, Users, Workflow, X } from 'lucide-react'
+import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { Activity, BarChart3, Blocks, Check, ChevronsUpDown, CreditCard, Home, Inbox, Instagram, LogOut, MailWarning, Megaphone, Menu, Plus, Settings, SlidersHorizontal, UserCog, Users, Workflow, X } from 'lucide-react'
 import { useAuth } from '../auth'
 import { useI18n, type TKey } from '../i18n'
 import { api } from '../api'
 import { Logo } from './Logo'
-import { Avatar } from './ui'
+import { Avatar, useToast } from './ui'
 import { PlanBadge, PlanBanner, planStatus } from './Plan'
 
 const NAV: { to: string; key: TKey; icon: typeof Home; end?: boolean }[] = [
   { to: '/app', key: 'nav.home', icon: Home, end: true },
+  { to: '/app/inbox', key: 'nav.inbox', icon: Inbox },
   { to: '/app/flows', key: 'nav.flows', icon: Workflow },
   { to: '/app/contacts', key: 'nav.contacts', icon: Users },
+  { to: '/app/broadcasts', key: 'nav.broadcasts', icon: Megaphone },
+  { to: '/app/integrations', key: 'nav.integrations', icon: Blocks },
   { to: '/app/activity', key: 'nav.activity', icon: Activity },
   { to: '/app/accounts', key: 'nav.accounts', icon: Instagram },
   { to: '/app/billing', key: 'nav.billing', icon: CreditCard },
@@ -110,6 +113,29 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   )
 }
 
+function VerifyBanner() {
+  const { t } = useI18n()
+  const toast = useToast()
+  const { me, refresh } = useAuth()
+  const [params, setParams] = useSearchParams()
+  const [sent, setSent] = useState(false)
+  useEffect(() => {
+    const v = params.get('verified')
+    if (v === null) return
+    if (v === '1') { toast(t('verify.ok')); refresh() } else toast(t('err.token_invalid'), 'error')
+    params.delete('verified')
+    setParams(params, { replace: true })
+  }, [params]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!me || me.user.email_verified || !me.features?.email) return null
+  return (
+    <div className="mb-6 flex flex-col gap-3 rounded-2xl border border-line bg-white px-4 py-3 sm:flex-row sm:items-center">
+      <div className="flex flex-1 items-center gap-2.5 text-[14px] text-ink-2"><MailWarning className="h-4 w-4 shrink-0 text-brand-600" />{t('verify.banner', { email: me.user.email })}</div>
+      <button disabled={sent} onClick={async () => { await api.post('/api/auth/verify/send'); setSent(true); toast(t('verify.sent')) }}
+        className="h-9 rounded-xl border border-line px-4 text-[13px] font-semibold hover:bg-soft disabled:opacity-50">{sent ? t('verify.sent') : t('verify.resend')}</button>
+    </div>
+  )
+}
+
 export default function AppLayout() {
   const [mobile, setMobile] = useState(false)
   const loc = useLocation()
@@ -130,7 +156,9 @@ export default function AppLayout() {
         </div>
       )}
       <main className="lg:pl-[260px]">
-        <div className="mx-auto max-w-6xl px-4 py-8 sm:px-8 sm:py-10"><PlanBanner /><Outlet /></div>
+        {loc.pathname.startsWith('/app/inbox')
+          ? <Outlet />
+          : <div className="mx-auto max-w-6xl px-4 py-8 sm:px-8 sm:py-10"><PlanBanner /><VerifyBanner /><Outlet /></div>}
       </main>
     </div>
   )

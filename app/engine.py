@@ -21,8 +21,9 @@ from . import instagram as ig
 from .config import settings
 from .db import SessionLocal
 from .flows import field_key, trigger_of
-from .models import (SEND_KINDS, Contact, EventLog, Flow, FlowSession, IGAccount, NodeStat, ProcessedEvent,
-                     ScheduledJob, utcnow)
+from .models import (SEND_KINDS, Broadcast, Contact, EventLog, Flow, FlowSession, IGAccount, Message, NodeStat,
+                     ProcessedEvent, ScheduledJob, utcnow)
+from . import services
 from .plans import account_owner_active
 from .security import decrypt, encrypt
 
@@ -111,6 +112,42 @@ def touch_inbound(db: Session, contact: Contact) -> None:
     db.commit()
 
 
+def record_message(db: Session, account_id: int, contact: Contact, direction: str, text: str, source: str) -> None:
+    """Jonli chat tarixi."""
+    text = (text or "").strip()
+    db.add(Message(account_id=account_id, contact_id=contact.id, direction=direction, source=source, text=text[:2000]))
+    contact.last_message_at = utcnow()
+    contact.last_message_preview = text[:250]
+    if direction == "in":
+        contact.unread = (contact.unread or 0) + 1
+    db.commit()
+
+
+def log_event(db: Session, account: IGAccount, contact: Contact | None, kind: str, incoming: str = "",
+              detail: str = "", flow_id: int | None = None) -> None:
+    db.add(EventLog(account_id=account.id, flow_id=flow_id, contact_id=contact.id if contact else None, kind=kind,
+                    username=contact.username if contact else "", incoming=incoming[:1000], detail=detail[:1000]))
+    db.commit()
+
+
+def contact_card(contact: Contact, title: str, extra: str = "") -> str:
+    lines = [title, ""]
+    who = " ".join(x for x in (f"@{contact.username}" if contact.username else "", contact.name) if x)
+    lines.append(f"👤 {who or contact.igsid}")
+    for k, v in contact.fields.items():
+        lines.append(f"• {k}: {v}")
+    if contact.tags:
+        lines.append("🏷 " + ", ".join(contact.tags))
+    if extra:
+        lines += ["", extra]
+    lines += ["", f"{settings.APP_URL}/app/inbox?c={contact.id}"]
+    return "\n".join(lines)
+
+
+def notify_telegram(account: IGAccount, text: str) -> None:
+    services.telegram_send(account.tg_bot_token_enc, account.tg_chat_id, text)
+
+
 def fill(template: str, contact: Contact) -> str:
     values = {"username": f"@{contact.username}" if contact.username else "", "name": contact.name or ""}
     values.update({k: str(v) for k, v in contact.fields.items()})
@@ -180,6 +217,7 @@ def send(ctx: Ctx, message: dict, desc: str) -> bool:
         ctx.log("error", f"{desc[:200]} → {e}")
         return False
     ctx.sent.append(message)
+    record_message(ctx.db, ctx.account.id, ctx.contact, "out", desc, "flow")
     return True
 
 
@@ -235,6 +273,17 @@ def apply_action(ctx: Ctx, d: dict) -> None:
         fields = c.fields
         fields[(d.get("field") or "").strip().lower()] = fill(d.get("value", ""), c)[:500]
         c.fields = fields
+    elif op == "notify":
+        if ctx.account.tg_chat_id:
+            notify_telegram(ctx.account, contact_card(c, f"🔔 {fill(d.get('text', ''), c) or ctx.flow.name}"))
+        else:
+            ctx.log("error", "notify → telegram_not_connected")
+    elif op == "webhook":
+        payload = {"event": "flow_webhook", "flow": {"id": ctx.flow.id, "name": ctx.flow.name},
+                   "account": ctx.account.username,
+                   "contact": {"id": c.id, "username": c.username, "name": c.name, "tags": c.tags, "fields": c.fields}}
+        problem = services.post_webhook((d.get("url") or "").strip(), payload)
+        ctx.log("error" if problem else "webhook", f"webhook → {problem}" if problem else d.get("url", ""))
     ctx.db.commit()
 
 
@@ -334,6 +383,9 @@ def handle_comment(db: Session, account: IGAccount, value: dict) -> None:
     if not flow or not mark_processed(db, f"c:{comment_id}"):
         return
     contact = get_contact(db, account, sender_id, sender.get("username") or "")
+    record_message(db, account.id, contact, "in", f"💬 {text}", "comment")
+    if contact.bot_paused():
+        return
     ctx = make_ctx(db, account, contact, flow, comment_id=comment_id, incoming=text)
 
     variants = [v.strip() for v in (trig["data"].get("comment_replies") or "").splitlines() if v.strip()]
@@ -392,6 +444,8 @@ def handle_answer(db: Session, account: IGAccount, contact: Contact, session: Fl
     db.commit()
     bump(db, flow.id, node["id"], "answered")
     ctx.log("answer", f"{key} = {value[:100]}")
+    if account.tg_notify_leads and account.tg_chat_id:
+        notify_telegram(account, contact_card(contact, f"🎯 {flow.name}"))
     run_from(ctx, ctx.graph.next(node["id"]))
 
 
@@ -443,25 +497,38 @@ def handle_messaging(db: Session, account: IGAccount, event: dict) -> None:
     if not postback and (not message or message.get("is_echo") or message.get("is_deleted")):
         return
 
+    mid = (postback or {}).get("mid") or message.get("mid") or f"{sender_id}:{event.get('timestamp')}"
+    if not mark_processed(db, f"in:{mid}"):
+        return  # Meta webhook'ni qayta yubordi
+
     contact = get_contact(db, account, sender_id)
     touch_inbound(db, contact)
 
+    text = message.get("text") or ""
+    attachments = message.get("attachments") or []
+    qr = (message.get("quick_reply") or {}).get("payload")
     if postback:
-        mid = postback.get("mid") or f"{sender_id}:{event.get('timestamp')}"
+        record_message(db, account.id, contact, "in", f"[{postback.get('title') or 'button'}]", "button")
+    elif qr:
+        record_message(db, account.id, contact, "in", f"[{text or 'button'}]", "button")
+    elif any(a.get("type") == "story_mention" for a in attachments):
+        record_message(db, account.id, contact, "in", "@ story mention", "story")
+    elif (message.get("reply_to") or {}).get("story"):
+        record_message(db, account.id, contact, "in", f"↩ story: {text}", "story")
+    else:
+        record_message(db, account.id, contact, "in", text or "[media]", "user")
+
+    if contact.bot_paused():
+        return  # operator suhbatni o'z qo'liga olgan
+
+    if postback:
         handle_postback(db, account, contact, postback.get("payload") or "", postback.get("title") or "", mid)
         return
-
-    mid = message.get("mid")
-    if not mid:
-        return
-    qr = (message.get("quick_reply") or {}).get("payload")
     if qr:
-        handle_postback(db, account, contact, qr, message.get("text") or "", mid)
+        handle_postback(db, account, contact, qr, text, mid)
         return
     ensure_profile(db, account, contact)
 
-    text = message.get("text") or ""
-    attachments = message.get("attachments") or []
     if any(a.get("type") == "story_mention" for a in attachments):
         kind = "story_mention"
     elif (message.get("reply_to") or {}).get("story"):
@@ -482,10 +549,91 @@ def handle_messaging(db: Session, account: IGAccount, event: dict) -> None:
             return
 
     flow, trig = find_flow(db, account, kind, text)
-    if not flow or not mark_processed(db, f"m:{mid}"):
+    if not flow:
+        # Hech bir ssenariy mos kelmadi: AI yordamchi yoki operatorga xabarnoma
+        if kind == "dm" and text and mark_processed(db, f"m:{mid}"):
+            if not (account.ai_enabled and ai_answer(db, account, contact, text)):
+                if account.tg_notify_inbox and account.tg_chat_id:
+                    notify_telegram(account, contact_card(contact, "💬 Direct", f"“{text[:500]}”"))
+        return
+    if not mark_processed(db, f"m:{mid}"):
         return
     ctx = make_ctx(db, account, contact, flow, incoming=text or f"[{kind}]")
     start_flow(ctx, trig)
+
+
+def ai_answer(db: Session, account: IGAccount, contact: Contact, text: str) -> bool:
+    if not services.ai_available(db):
+        return False
+    if sends_last_hour(db, account.id) >= settings.HOURLY_SEND_LIMIT:
+        log_event(db, account, contact, "skipped", text, "limit")
+        return False
+    rows = db.scalars(select(Message).where(Message.contact_id == contact.id, Message.source != "comment")
+                      .order_by(Message.id.desc()).limit(12)).all()
+    history = [{"role": "user" if m.direction == "in" else "assistant", "content": m.text or "…"} for m in reversed(rows)]
+    answer = services.ai_reply(db, account.ai_prompt, history)
+    if not answer:
+        log_event(db, account, contact, "skipped", text, "ai_no_answer")
+        return False
+    try:
+        ig.send_dm(decrypt(account.access_token_enc), contact.igsid, {"text": answer})
+    except ig.IGError as e:
+        log_event(db, account, contact, "error", text, f"ai_reply → {e}")
+        return False
+    log_event(db, account, contact, "ai_reply", text, answer)
+    record_message(db, account.id, contact, "out", answer, "ai")
+    return True
+
+
+def run_broadcast(broadcast_id: int) -> None:
+    """Rassilka: 24 soat ichida yozgan kontaktlarga (teg bo'yicha) xabar yuborish."""
+    import json as _json
+    import time
+
+    db = SessionLocal()
+    try:
+        b = db.get(Broadcast, broadcast_id)
+        if not b:
+            return
+        account = db.get(IGAccount, b.account_id)
+        token = decrypt(account.access_token_enc)
+        buttons = [ig.url_button(x["title"], x["url"]) for x in _json.loads(b.buttons_json or "[]")]
+        message = ig.build_message(b.text, buttons)
+        for contact in broadcast_audience(db, account.id, b.tag):
+            if sends_last_hour(db, account.id) >= settings.HOURLY_SEND_LIMIT:
+                b.status = "limited"
+                break
+            text = fill(b.text, contact)
+            try:
+                ig.send_dm(token, contact.igsid, ig.build_message(text, buttons) if "{" in b.text else message)
+                b.sent += 1
+                log_event(db, account, contact, "broadcast", "", text[:200])
+                record_message(db, account.id, contact, "out", text, "broadcast")
+            except ig.IGError as e:
+                b.failed += 1
+                log.info("broadcast %s → %s: %s", b.id, contact.igsid, e)
+            db.commit()
+            time.sleep(0.3)
+        else:
+            b.status = "done"
+        b.finished_at = utcnow()
+        db.commit()
+    except Exception:
+        log.exception("broadcast failed")
+        db.rollback()
+        b = db.get(Broadcast, broadcast_id)
+        if b:
+            b.status = "interrupted"
+            b.finished_at = utcnow()
+            db.commit()
+    finally:
+        db.close()
+
+
+def broadcast_audience(db: Session, account_id: int, tag: str = "") -> list[Contact]:
+    since = utcnow() - timedelta(hours=23, minutes=30)
+    rows = db.scalars(select(Contact).where(Contact.account_id == account_id, Contact.last_inbound_at >= since)).all()
+    return [c for c in rows if not tag or tag in c.tags]
 
 
 def process_payload(payload: dict) -> None:

@@ -4,11 +4,15 @@ import io
 import json
 import logging
 import secrets
+import threading
 from contextlib import asynccontextmanager
 from collections import Counter
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
+
+import httpx
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, RedirectResponse,
@@ -20,11 +24,14 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import instagram as ig
+from . import services
 from .config import settings
 from .db import get_db, init_db
-from .engine import process_payload, refresh_expiring_tokens, resubscribe_all, run_due_jobs
+from .engine import (broadcast_audience, log_event, process_payload, record_message, refresh_expiring_tokens,
+                     resubscribe_all, run_broadcast, run_due_jobs)
 from .flows import blank_graph, build_template, list_templates, trigger_of, validate_graph
-from .models import (LANGS, SEND_KINDS, Contact, EventLog, Flow, IGAccount, NodeStat, PlanGrant, User, utcnow)
+from .models import (LANGS, SEND_KINDS, Broadcast, Contact, EventLog, Flow, IGAccount, Message, NodeStat, PlanGrant,
+                     User, utcnow)
 from .plans import (PLANS, TRIAL_DAYS, accounts_limit, get_setting, is_active, plan_json, plans_public,
                     set_setting)
 from .security import (decrypt, encrypt, hash_password, parse_signed_request, verify_password,
@@ -57,6 +64,7 @@ async def _background_loops():
 async def lifespan(app: FastAPI):
     init_db()
     _promote_admins()
+    _interrupt_broadcasts()
     task = asyncio.create_task(_background_loops())
     yield
     task.cancel()
@@ -64,6 +72,19 @@ async def lifespan(app: FastAPI):
 
 def _admin_emails() -> list[str]:
     return [e.strip().lower() for e in settings.ADMIN_EMAILS.split(",") if e.strip()]
+
+
+_http = httpx.Client(timeout=15)
+
+
+def _interrupt_broadcasts():
+    """Server qayta ishga tushsa — tugallanmagan rassilkalar 'to'xtatildi' deb belgilanadi."""
+    from .db import SessionLocal
+    with SessionLocal() as db:
+        for b in db.scalars(select(Broadcast).where(Broadcast.status == "running")):
+            b.status = "interrupted"
+            b.finished_at = utcnow()
+        db.commit()
 
 
 def _promote_admins():
@@ -140,7 +161,7 @@ def iso(dt) -> str | None:
 
 def user_json(u: User) -> dict:
     return {"id": u.id, "email": u.email, "name": u.name, "lang": u.lang, "is_admin": u.is_admin,
-            "plan": plan_json(u)}
+            "plan": plan_json(u), "email_verified": u.email_verified}
 
 
 def account_json(a: IGAccount) -> dict:
@@ -177,7 +198,7 @@ def detect_lang(request: Request) -> str:
 # ---------------------------------------------------------------- auth
 
 @app.post("/api/auth/register")
-def register(request: Request, body: dict = Body(...), db: Session = Depends(get_db)):
+def register(request: Request, background: BackgroundTasks, body: dict = Body(...), db: Session = Depends(get_db)):
     email = str(body.get("email") or "").strip().lower()
     password = str(body.get("password") or "")
     name = str(body.get("name") or "").strip()[:120]
@@ -196,6 +217,9 @@ def register(request: Request, body: dict = Body(...), db: Session = Depends(get
     db.commit()
     request.session.clear()
     request.session["uid"] = user.id
+    cfg = services.smtp_config(db)
+    if cfg:
+        _send_verify(background, cfg, user)
     return {"user": user_json(user)}
 
 
@@ -222,7 +246,8 @@ def logout(request: Request):
 @app.get("/api/me")
 def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
     return {"user": user_json(user), "accounts": [account_json(a) for a in user.accounts],
-            "ig_ready": settings.ig_ready, "telegram": get_setting(db, "telegram_username")}
+            "ig_ready": settings.ig_ready, "telegram": get_setting(db, "telegram_username"),
+            "features": {"email": bool(services.smtp_config(db)), "ai": services.ai_available(db)}}
 
 
 @app.get("/api/plans")
@@ -801,6 +826,435 @@ def admin_settings_save(body: dict = Body(...), admin: User = Depends(admin_user
     return {"telegram_username": tg[:64]}
 
 
+# ---------------------------------------------------------------- email: tasdiqlash va parolni tiklash
+
+_signer = URLSafeTimedSerializer(settings.SECRET_KEY, salt="chatflow-auth")
+
+EMAIL_TEXT = {
+    "en": {"reset_s": "Reset your ChatFlow password", "reset_t": "Reset password",
+           "reset_b": "Someone (hopefully you) asked to reset the password of your ChatFlow account. The link is valid for 1 hour.",
+           "reset_btn": "Set a new password",
+           "verify_s": "Confirm your email — ChatFlow", "verify_t": "Confirm your email",
+           "verify_b": "Welcome to ChatFlow! Please confirm your email address.", "verify_btn": "Confirm email"},
+    "ru": {"reset_s": "Восстановление пароля ChatFlow", "reset_t": "Восстановление пароля",
+           "reset_b": "Кто-то (надеемся, вы) запросил сброс пароля аккаунта ChatFlow. Ссылка действует 1 час.",
+           "reset_btn": "Задать новый пароль",
+           "verify_s": "Подтвердите email — ChatFlow", "verify_t": "Подтвердите email",
+           "verify_b": "Добро пожаловать в ChatFlow! Подтвердите, пожалуйста, ваш email.", "verify_btn": "Подтвердить email"},
+    "uz": {"reset_s": "ChatFlow parolini tiklash", "reset_t": "Parolni tiklash",
+           "reset_b": "Kimdir (umid qilamizki, siz) ChatFlow hisobingiz parolini tiklashni so'radi. Havola 1 soat amal qiladi.",
+           "reset_btn": "Yangi parol o'rnatish",
+           "verify_s": "Emailingizni tasdiqlang — ChatFlow", "verify_t": "Emailingizni tasdiqlang",
+           "verify_b": "ChatFlow'ga xush kelibsiz! Iltimos, email manzilingizni tasdiqlang.", "verify_btn": "Emailni tasdiqlash"},
+    "tj": {"reset_s": "Барқарор кардани пароли ChatFlow", "reset_t": "Барқарор кардани парол",
+           "reset_b": "Касе (умедворем, шумо) барқарор кардани пароли ҳисоби ChatFlow-ро дархост кард. Пайванд 1 соат эътибор дорад.",
+           "reset_btn": "Пароли нав гузоштан",
+           "verify_s": "Email-и худро тасдиқ кунед — ChatFlow", "verify_t": "Email-ро тасдиқ кунед",
+           "verify_b": "Ба ChatFlow хуш омадед! Лутфан суроғаи email-и худро тасдиқ кунед.", "verify_btn": "Тасдиқи email"},
+}
+
+
+def _mail_bg(cfg: dict, to: str, subject: str, text: str, html: str) -> None:
+    try:
+        services.send_email(cfg, to, subject, text, html)
+    except Exception:  # noqa: BLE001
+        log.exception("email yuborilmadi: %s", to)
+
+
+def _send_verify(background: BackgroundTasks, cfg: dict, user: User) -> None:
+    tx = EMAIL_TEXT.get(user.lang, EMAIL_TEXT["en"])
+    url = f"{settings.APP_URL}/verify-email?token={_signer.dumps({'k': 'verify', 'uid': user.id, 'e': user.email})}"
+    background.add_task(_mail_bg, cfg, user.email, tx["verify_s"], f"{tx['verify_b']}\n\n{url}",
+                        services.email_html(tx["verify_t"], tx["verify_b"], tx["verify_btn"], url))
+
+
+def _untoken(token: str, kind: str, max_age: int) -> dict:
+    try:
+        data = _signer.loads(token, max_age=max_age)
+    except (BadSignature, SignatureExpired):
+        err("token_invalid")
+    if not isinstance(data, dict) or data.get("k") != kind:
+        err("token_invalid")
+    return data
+
+
+@app.get("/api/auth/config")
+def auth_config(db: Session = Depends(get_db)):
+    return {"google": _google_ready(db), "email": bool(services.smtp_config(db)),
+            "telegram": get_setting(db, "telegram_username")}
+
+
+@app.post("/api/auth/forgot")
+def forgot(background: BackgroundTasks, body: dict = Body(...), db: Session = Depends(get_db)):
+    cfg = services.smtp_config(db)
+    if not cfg:
+        return {"sent": False}
+    user = db.scalar(select(User).where(User.email == str(body.get("email") or "").strip().lower()))
+    if user and not user.is_blocked:  # foydalanuvchi bor-yo'qligini oshkor qilmaymiz
+        tx = EMAIL_TEXT.get(user.lang, EMAIL_TEXT["en"])
+        token = _signer.dumps({"k": "reset", "uid": user.id, "ph": user.password_hash[-16:]})
+        url = f"{settings.APP_URL}/reset?token={token}"
+        background.add_task(_mail_bg, cfg, user.email, tx["reset_s"], f"{tx['reset_b']}\n\n{url}",
+                            services.email_html(tx["reset_t"], tx["reset_b"], tx["reset_btn"], url))
+    return {"sent": True}
+
+
+@app.post("/api/auth/reset")
+def reset_password(request: Request, body: dict = Body(...), db: Session = Depends(get_db)):
+    data = _untoken(str(body.get("token") or ""), "reset", 3600)
+    user = db.get(User, data.get("uid"))
+    # Parol bir marta almashtirilgach, eski havola ishlamaydi
+    if not user or user.password_hash[-16:] != data.get("ph") or user.is_blocked:
+        err("token_invalid")
+    password = str(body.get("password") or "")
+    if len(password) < 8:
+        err("password_short")
+    user.password_hash = hash_password(password)
+    user.email_verified = True
+    user.last_login_at = utcnow()
+    db.commit()
+    request.session.clear()
+    request.session["uid"] = user.id
+    return {"user": user_json(user)}
+
+
+@app.post("/api/auth/verify/send")
+def verify_send(background: BackgroundTasks, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    cfg = services.smtp_config(db)
+    if not cfg:
+        err("email_disabled")
+    _send_verify(background, cfg, user)
+    return {"ok": True}
+
+
+@app.get("/verify-email")
+def verify_email(token: str = "", db: Session = Depends(get_db)):
+    try:
+        data = _signer.loads(token, max_age=7 * 86400)
+        user = db.get(User, data.get("uid")) if data.get("k") == "verify" else None
+    except (BadSignature, SignatureExpired):
+        user = None
+    if not user or user.email != data.get("e"):
+        return RedirectResponse("/app?verified=0", status_code=303)
+    user.email_verified = True
+    db.commit()
+    return RedirectResponse("/app?verified=1", status_code=303)
+
+
+# ---------------------------------------------------------------- Google orqali kirish
+
+def _google_ready(db: Session) -> bool:
+    return bool(get_setting(db, "google_client_id") and services.get_secret(db, "google_client_secret"))
+
+
+def _google_redirect() -> str:
+    return f"{settings.APP_URL}/auth/google/callback"
+
+
+@app.get("/auth/google")
+def google_start(request: Request, db: Session = Depends(get_db)):
+    if not _google_ready(db):
+        return RedirectResponse("/login?error=google", status_code=303)
+    state = secrets.token_urlsafe(24)
+    request.session["google_state"] = state
+    params = {"client_id": get_setting(db, "google_client_id"), "redirect_uri": _google_redirect(),
+              "response_type": "code", "scope": "openid email profile", "state": state, "prompt": "select_account"}
+    return RedirectResponse("https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params), status_code=302)
+
+
+@app.get("/auth/google/callback")
+def google_callback(request: Request, code: str = "", state: str = "", db: Session = Depends(get_db)):
+    expected = request.session.pop("google_state", None)
+    if not code or not expected or state != expected or not _google_ready(db):
+        return RedirectResponse("/login?error=google", status_code=303)
+    try:
+        tok = _http.post("https://oauth2.googleapis.com/token", data={
+            "code": code, "client_id": get_setting(db, "google_client_id"),
+            "client_secret": services.get_secret(db, "google_client_secret"),
+            "redirect_uri": _google_redirect(), "grant_type": "authorization_code"}).json()
+        info = _http.get("https://openidconnect.googleapis.com/v1/userinfo",
+                         headers={"Authorization": f"Bearer {tok['access_token']}"}).json()
+    except (httpx.HTTPError, KeyError, ValueError):
+        return RedirectResponse("/login?error=google", status_code=303)
+    email = str(info.get("email") or "").lower()
+    if not info.get("sub") or not email or not info.get("email_verified"):
+        return RedirectResponse("/login?error=google", status_code=303)
+    user = db.scalar(select(User).where(User.google_sub == info["sub"])) or \
+        db.scalar(select(User).where(User.email == email))
+    if user and user.is_blocked:
+        return RedirectResponse("/login?error=blocked", status_code=303)
+    if not user:
+        user = User(email=email, name=str(info.get("name") or "")[:120], password_hash=hash_password(secrets.token_urlsafe(24)),
+                    lang=detect_lang(request), plan="trial", plan_expires_at=utcnow() + timedelta(days=TRIAL_DAYS))
+        if email in _admin_emails():
+            user.is_admin = True
+        db.add(user)
+    user.google_sub = info["sub"]
+    user.email_verified = True
+    user.last_login_at = utcnow()
+    db.commit()
+    request.session.clear()
+    request.session["uid"] = user.id
+    return RedirectResponse("/app", status_code=303)
+
+
+# ---------------------------------------------------------------- integratsiyalar (AI, Telegram)
+
+def _integrations_json(db: Session, acc: IGAccount) -> dict:
+    return {"ai_enabled": acc.ai_enabled, "ai_prompt": acc.ai_prompt, "ai_available": services.ai_available(db),
+            "telegram": {"connected": bool(acc.tg_chat_id), "chat": acc.tg_chat_title},
+            "tg_notify_leads": acc.tg_notify_leads, "tg_notify_inbox": acc.tg_notify_inbox}
+
+
+@app.get("/api/accounts/{account_id}/integrations")
+def integrations_get(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return _integrations_json(db, owned_account(db, user, account_id))
+
+
+@app.put("/api/accounts/{account_id}/integrations")
+def integrations_save(account_id: int, body: dict = Body(...), user: User = Depends(current_user),
+                      db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    if "ai_prompt" in body:
+        acc.ai_prompt = str(body["ai_prompt"] or "")[:8000]
+    for key in ("ai_enabled", "tg_notify_leads", "tg_notify_inbox"):
+        if key in body:
+            setattr(acc, key, bool(body[key]))
+    db.commit()
+    return _integrations_json(db, acc)
+
+
+@app.post("/api/accounts/{account_id}/telegram")
+def telegram_connect(account_id: int, body: dict = Body(...), user: User = Depends(current_user),
+                     db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    token = str(body.get("bot_token") or "").strip()
+    if not token or ":" not in token:
+        err("tg_invalid")
+    try:
+        chat_id, title = services.telegram_connect(token)
+    except services.TelegramError as e:
+        err("tg_no_chat" if str(e) == "no_chat" else "tg_invalid")
+    acc.tg_bot_token_enc = encrypt(token)
+    acc.tg_chat_id = chat_id
+    acc.tg_chat_title = title[:255]
+    db.commit()
+    services.telegram_send(acc.tg_bot_token_enc, chat_id, f"✅ ChatFlow: @{acc.username}")
+    return _integrations_json(db, acc)
+
+
+@app.delete("/api/accounts/{account_id}/telegram")
+def telegram_disconnect(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    acc.tg_bot_token_enc, acc.tg_chat_id, acc.tg_chat_title = "", "", ""
+    db.commit()
+    return _integrations_json(db, acc)
+
+
+@app.post("/api/accounts/{account_id}/ai/test")
+def ai_test(account_id: int, body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    if not services.ai_available(db):
+        err("ai_unavailable")
+    question = str(body.get("message") or "").strip()[:1000]
+    if not question:
+        err("empty")
+    prompt = str(body.get("prompt") if body.get("prompt") is not None else acc.ai_prompt)
+    answer = services.ai_reply(db, prompt, [{"role": "user", "content": question}])
+    if not answer:
+        err("ai_failed")
+    return {"answer": answer}
+
+
+# ---------------------------------------------------------------- jonli chat (Inbox)
+
+def _owned_contact(db: Session, user: User, contact_id: int) -> Contact:
+    c = db.get(Contact, contact_id)
+    if not c or c.account.user_id != user.id:
+        err("not_found", 404)
+    return c
+
+
+def _conv_json(c: Contact) -> dict:
+    return {**contact_json(c), "preview": c.last_message_preview, "last_message_at": iso(c.last_message_at),
+            "unread": c.unread or 0, "bot_paused": c.bot_paused(), "bot_paused_until": iso(c.bot_paused_until),
+            "can_message": c.can_message()}
+
+
+@app.get("/api/inbox")
+def inbox_list(account_id: int, q: str = "", user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    stmt = select(Contact).where(Contact.account_id == acc.id, Contact.last_message_at.is_not(None))
+    if q.strip():
+        like = f"%{q.strip().lower()}%"
+        stmt = stmt.where(or_(func.lower(Contact.username).like(like), func.lower(Contact.name).like(like)))
+    rows = db.scalars(stmt.order_by(Contact.last_message_at.desc()).limit(100)).all()
+    return {"items": [_conv_json(c) for c in rows],
+            "unread": db.scalar(select(func.coalesce(func.sum(Contact.unread), 0)).where(Contact.account_id == acc.id)) or 0}
+
+
+@app.get("/api/inbox/{contact_id}")
+def inbox_thread(contact_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    c = _owned_contact(db, user, contact_id)
+    msgs = db.scalars(select(Message).where(Message.contact_id == c.id).order_by(Message.id.desc()).limit(200)).all()
+    if c.unread:
+        c.unread = 0
+        db.commit()
+    return {"contact": _conv_json(c),
+            "messages": [{"id": m.id, "direction": m.direction, "source": m.source, "text": m.text,
+                          "created_at": iso(m.created_at)} for m in reversed(msgs)]}
+
+
+@app.post("/api/inbox/{contact_id}/send")
+def inbox_send(contact_id: int, body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    c = _owned_contact(db, user, contact_id)
+    text = str(body.get("text") or "").strip()
+    if not text or len(text) > 1000:
+        err("message_text")
+    if not is_active(user):
+        err("plan_inactive")
+    if not c.can_message():
+        err("window_closed")
+    try:
+        ig.send_dm(decrypt(c.account.access_token_enc), c.igsid, {"text": text})
+    except ig.IGError as e:
+        err(f"ig:{e}"[:200])
+    log_event(db, c.account, c, "agent_reply", "", text)
+    record_message(db, c.account_id, c, "out", text, "agent")
+    if body.get("pause", True):
+        until = utcnow() + timedelta(minutes=60)
+        if not c.bot_paused_until or c.bot_paused_until < until:
+            c.bot_paused_until = until
+        db.commit()
+    return inbox_thread(contact_id, user, db)
+
+
+@app.post("/api/inbox/{contact_id}/pause")
+def inbox_pause(contact_id: int, body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    c = _owned_contact(db, user, contact_id)
+    minutes = max(0, min(int(body.get("minutes") or 0), 60 * 24 * 30))
+    c.bot_paused_until = utcnow() + timedelta(minutes=minutes) if minutes else None
+    db.commit()
+    return _conv_json(c)
+
+
+# ---------------------------------------------------------------- rassilka
+
+def _broadcast_json(b: Broadcast) -> dict:
+    return {"id": b.id, "text": b.text, "tag": b.tag, "status": b.status, "total": b.total, "sent": b.sent,
+            "failed": b.failed, "buttons": json.loads(b.buttons_json or "[]"),
+            "created_at": iso(b.created_at), "finished_at": iso(b.finished_at)}
+
+
+@app.get("/api/broadcasts")
+def broadcasts_list(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    rows = db.scalars(select(Broadcast).where(Broadcast.account_id == acc.id).order_by(Broadcast.id.desc()).limit(50)).all()
+    return {"items": [_broadcast_json(b) for b in rows]}
+
+
+@app.get("/api/broadcasts/audience")
+def broadcasts_audience(account_id: int, tag: str = "", user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    return {"eligible": len(broadcast_audience(db, acc.id, tag.strip())),
+            "total": db.scalar(select(func.count(Contact.id)).where(Contact.account_id == acc.id)) or 0}
+
+
+@app.post("/api/broadcasts")
+def broadcasts_create(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, int(body.get("account_id") or 0))
+    if not is_active(user):
+        err("plan_inactive")
+    text = str(body.get("text") or "").strip()
+    buttons = []
+    for b in (body.get("buttons") or [])[:3]:
+        title, url = str(b.get("title") or "").strip(), str(b.get("url") or "").strip()
+        if not title and not url:
+            continue
+        if not title or len(title) > 20:
+            err("button_title")
+        if not url.startswith(("https://", "http://")):
+            err("button_url")
+        buttons.append({"title": title, "url": url})
+    if not text or len(text) > (640 if buttons else 1000):
+        err("message_text")
+    if db.scalar(select(Broadcast).where(Broadcast.account_id == acc.id, Broadcast.status == "running")):
+        err("broadcast_running")
+    tag = str(body.get("tag") or "").strip()[:40]
+    audience = broadcast_audience(db, acc.id, tag)
+    if not audience:
+        err("no_audience")
+    b = Broadcast(account_id=acc.id, text=text, tag=tag, total=len(audience),
+                  buttons_json=json.dumps(buttons, ensure_ascii=False))
+    db.add(b)
+    db.commit()
+    threading.Thread(target=run_broadcast, args=(b.id,), daemon=True).start()
+    return _broadcast_json(b)
+
+
+# ---------------------------------------------------------------- admin: platforma sozlamalari, parol
+
+@app.post("/api/admin/users/{user_id}/password")
+def admin_set_password(user_id: int, body: dict = Body(...), admin: User = Depends(admin_user),
+                       db: Session = Depends(get_db)):
+    u = _get_user(db, user_id)
+    password = str(body.get("password") or "")
+    if len(password) < 8:
+        err("password_short")
+    u.password_hash = hash_password(password)
+    db.commit()
+    return {"ok": True}
+
+
+PLAIN_SETTINGS = ("smtp_host", "smtp_port", "smtp_user", "smtp_from", "google_client_id")
+
+
+def _platform_settings(db: Session) -> dict:
+    out = {"telegram_username": get_setting(db, "telegram_username")}
+    for k in PLAIN_SETTINGS:
+        out[k] = get_setting(db, k)
+    for k in services.SECRET_KEYS:
+        out[f"{k}_set"] = bool(get_setting(db, k))
+    out["google_redirect"] = _google_redirect()
+    return out
+
+
+@app.get("/api/admin/platform")
+def admin_platform(admin: User = Depends(admin_user), db: Session = Depends(get_db)):
+    return _platform_settings(db)
+
+
+@app.put("/api/admin/platform")
+def admin_platform_save(body: dict = Body(...), admin: User = Depends(admin_user), db: Session = Depends(get_db)):
+    for k in PLAIN_SETTINGS:
+        if k in body:
+            set_setting(db, k, str(body[k] or "").strip()[:255])
+    for k in services.SECRET_KEYS:
+        if body.get(k):  # bo'sh qoldirilsa — eski qiymat saqlanadi
+            services.set_secret(db, k, str(body[k]).strip())
+        if body.get(f"clear_{k}"):
+            services.set_secret(db, k, "")
+    return _platform_settings(db)
+
+
+@app.post("/api/admin/platform/test-email")
+def admin_test_email(body: dict = Body(...), admin: User = Depends(admin_user), db: Session = Depends(get_db)):
+    cfg = services.smtp_config(db)
+    if not cfg:
+        err("email_disabled")
+    try:
+        services.send_email(cfg, str(body.get("to") or admin.email), "ChatFlow SMTP test", "SMTP ishlayapti ✅")
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": "smtp_failed", "detail": str(e)[:300]}, status_code=400)
+    return {"ok": True}
+
+
+@app.get("/health")
+def health(db: Session = Depends(get_db)):
+    db.execute(select(1))
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------- React ilova (SPA)
 
 if (WEB_DIR / "assets").is_dir():
@@ -809,7 +1263,7 @@ if (WEB_DIR / "assets").is_dir():
 
 @app.get("/{path:path}", include_in_schema=False)
 def spa(path: str):
-    if path.startswith(("api/", "webhook")):
+    if path.startswith(("api/", "webhook", "auth/google")):
         return JSONResponse({"error": "not_found"}, status_code=404)
     static = (WEB_DIR / path).resolve()
     if path and static.is_file() and WEB_DIR.resolve() in static.parents:

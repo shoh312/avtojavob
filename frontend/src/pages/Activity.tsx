@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Activity as ActivityIcon, AlertCircle, CheckCircle2, MessageCircle, MousePointerClick, PauseCircle, Send } from 'lucide-react'
+import { Activity as ActivityIcon, AlertCircle, CheckCircle2, Megaphone, MessageCircle, MousePointerClick, PauseCircle, Send, Sparkles, Webhook } from 'lucide-react'
 import { api, type Activity } from '../api'
 import { useAuth } from '../auth'
 import { useI18n, useTimeAgo, type TKey } from '../i18n'
@@ -14,6 +14,10 @@ const KIND: Record<string, { icon: typeof Send; cls: string }> = {
   click: { icon: MousePointerClick, cls: 'bg-sky-50 text-sky-700' },
   answer: { icon: CheckCircle2, cls: 'bg-emerald-50 text-emerald-700' },
   skipped: { icon: PauseCircle, cls: 'bg-amber-50 text-amber-700' },
+  ai_reply: { icon: Sparkles, cls: 'bg-[#fbeee8] text-[#b5502f]' },
+  agent_reply: { icon: Send, cls: 'bg-ink text-white' },
+  broadcast: { icon: Megaphone, cls: 'bg-sky-50 text-sky-700' },
+  webhook: { icon: Webhook, cls: 'bg-soft text-ink-2' },
   error: { icon: AlertCircle, cls: 'bg-brand-600 text-white' },
 }
 
@@ -33,7 +37,7 @@ export default function ActivityPage() {
 
   if (!account) return <Onboarding />
   const detail = (a: Activity) => {
-    if (a.kind === 'skipped' && ['wait_user', 'limit', 'answer_attempts'].includes(a.detail)) return t(`act.skip.${a.detail}` as TKey)
+    if (a.kind === 'skipped' && ['wait_user', 'limit', 'answer_attempts', 'ai_no_answer'].includes(a.detail)) return t(`act.skip.${a.detail}` as TKey)
     return a.detail
   }
 
