@@ -712,7 +712,7 @@ def test_lead_capture_from_direct(client, monkeypatch):
         {"sender": {"id": "lead-1"}, "recipient": {"id": IG_ID}, "timestamp": 1, "message": {"mid": mid, "text": text}}]}]}
     hook(client, msg(LONG_MID + "l1", "Narxi qancha?"))
     assert seen["leads"] == "ask"  # AI telefon so'rashga yo'naltirilgan
-    assert "END your reply by asking for their phone number" in services.build_system("x", "ask")
+    assert "FIRST answer with the facts" in services.build_system("x", "ask") and "only ONCE" in services.build_system("x", "ask")
     assert "manager will reply soon" not in services.build_system("x", "ask")
     sent.clear()
     hook(client, msg(LONG_MID + "l2", "Mening raqamim 90 123 45 67"))
