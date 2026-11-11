@@ -7,7 +7,7 @@ import { Button, PageHeader, Spinner, Toggle, useToast } from '../components/ui'
 import { Onboarding } from './Home'
 
 type Integ = {
-  ai_enabled: boolean; ai_prompt: string; ai_available: boolean
+  ai_enabled: boolean; ai_prompt: string; ai_available: boolean; ai_collect_leads: boolean
   telegram: { connected: boolean; chat: string; two_way: boolean }; tg_notify_leads: boolean; tg_notify_inbox: boolean; tg_notify_all: boolean
 }
 
@@ -60,6 +60,11 @@ export default function Integrations() {
             <span className="label">{t('int.ai.prompt')}</span>
             <textarea rows={8} className="input resize-y" maxLength={8000} value={prompt} placeholder={t('int.ai.prompt_ph')} onChange={e => setPrompt(e.target.value)} />
             <p className="hint">{t('int.ai.hint')}</p>
+          </label>
+          <label className="mt-4 flex items-start justify-between gap-4 rounded-xl border border-line px-4 py-3">
+            <span><span className="block text-[14px] font-semibold">{t('int.ai.leads')}</span>
+              <span className="block text-[12.5px] text-ink-3">{t('int.ai.leads_d')}</span></span>
+            <Toggle checked={d.ai_collect_leads} onChange={v => save({ ai_collect_leads: v })} />
           </label>
           <div className="mt-3 flex justify-end">
             <Button size="sm" variant="secondary" disabled={prompt === d.ai_prompt} onClick={() => save({ ai_prompt: prompt }).then(() => toast(t('common.saved')))}>{t('common.save')}</Button>

@@ -1041,6 +1041,7 @@ def google_callback(request: Request, code: str = "", state: str = "", db: Sessi
 
 def _integrations_json(db: Session, acc: IGAccount) -> dict:
     return {"ai_enabled": acc.ai_enabled, "ai_prompt": acc.ai_prompt, "ai_available": services.ai_available(db),
+            "ai_collect_leads": acc.ai_collect_leads,
             "telegram": {"connected": bool(acc.tg_chat_id), "chat": acc.tg_chat_title,
                          "two_way": settings.APP_URL.startswith("https://")},
             "tg_notify_leads": acc.tg_notify_leads, "tg_notify_inbox": acc.tg_notify_inbox,
@@ -1058,7 +1059,7 @@ def integrations_save(account_id: int, body: dict = Body(...), user: User = Depe
     acc = owned_account(db, user, account_id)
     if "ai_prompt" in body:
         acc.ai_prompt = str(body["ai_prompt"] or "")[:8000]
-    for key in ("ai_enabled", "tg_notify_leads", "tg_notify_inbox", "tg_notify_all"):
+    for key in ("ai_enabled", "ai_collect_leads", "tg_notify_leads", "tg_notify_inbox", "tg_notify_all"):
         if key in body:
             setattr(acc, key, bool(body[key]))
     db.commit()

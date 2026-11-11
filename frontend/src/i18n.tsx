@@ -151,6 +151,8 @@ const en = {
   // sozlamalar
   'set.title': 'Settings', 'set.profile': 'Profile', 'set.language': 'Language', 'set.password': 'Change password',
   'set.current_pw': 'Current password', 'set.new_pw': 'New password', 'set.saved': 'Settings saved',
+  "int.ai.leads": "Collect leads",
+  "int.ai.leads_d": "When a customer wants to buy, the AI asks for a phone number. Phones and emails written in Direct are saved to the contact, added to CRM and sent to Telegram automatically.",
   "int.tg.all": "Every new customer message",
   "int.tg.reply_info": "Answer right from Telegram: Reply to a customer's message in the bot — your answer goes to Instagram Direct. Buttons under each message pause the bot or open the chat.",
   "int.tg.reply_https": "Replying from Telegram works only when the site runs on https.",
@@ -530,6 +532,8 @@ const ru: Dict = {
 
   'set.title': 'Настройки', 'set.profile': 'Профиль', 'set.language': 'Язык', 'set.password': 'Сменить пароль',
   'set.current_pw': 'Текущий пароль', 'set.new_pw': 'Новый пароль', 'set.saved': 'Настройки сохранены',
+  "int.ai.leads": "Собирать заявки",
+  "int.ai.leads_d": "Когда клиент хочет купить, AI спросит номер телефона. Телефоны и email из Direct автоматически сохраняются в контакт, попадают в CRM и в Telegram.",
   "int.tg.all": "Каждое новое сообщение клиента",
   "int.tg.reply_info": "Отвечайте прямо из Telegram: сделайте Reply на сообщение клиента в боте — ответ уйдёт в Instagram Direct. Кнопки под сообщением ставят бота на паузу или открывают чат.",
   "int.tg.reply_https": "Ответ из Telegram работает только когда сайт работает по https.",
@@ -907,6 +911,8 @@ const uz: Dict = {
 
   'set.title': 'Sozlamalar', 'set.profile': 'Profil', 'set.language': 'Til', 'set.password': "Parolni o'zgartirish",
   'set.current_pw': 'Joriy parol', 'set.new_pw': 'Yangi parol', 'set.saved': 'Sozlamalar saqlandi',
+  "int.ai.leads": "Lid yig'ish",
+  "int.ai.leads_d": "Mijoz sotib olmoqchi bo'lsa, AI telefon raqamini so'raydi. Direct'da yozilgan telefon va email avtomatik kontaktga saqlanadi, CRM'ga va Telegram'ga tushadi.",
   "int.tg.all": "Mijozning har bir yangi xabari",
   "int.tg.reply_info": "Telegram'dan turib javob bering: botdagi mijoz xabariga Reply qiling — javobingiz Instagram Direct'ga ketadi. Xabar ostidagi tugmalar botni to'xtatadi yoki chatni ochadi.",
   "int.tg.reply_https": "Telegram'dan javob berish faqat sayt https'da ishlaganda ishlaydi.",
@@ -1284,6 +1290,8 @@ const tj: Dict = {
 
   'set.title': 'Танзимот', 'set.profile': 'Профил', 'set.language': 'Забон', 'set.password': 'Иваз кардани парол',
   'set.current_pw': 'Пароли ҷорӣ', 'set.new_pw': 'Пароли нав', 'set.saved': 'Танзимот нигоҳ дошта шуд',
+  "int.ai.leads": "Ҷамъоварии лидҳо",
+  "int.ai.leads_d": "Вақте мизоҷ харидан мехоҳад, AI рақами телефонро мепурсад. Телефон ва email аз Direct худкор дар контакт нигоҳ дошта, ба CRM ва Telegram меафтанд.",
   "int.tg.all": "Ҳар паёми нави мизоҷ",
   "int.tg.reply_info": "Бевосита аз Telegram ҷавоб диҳед: ба паёми мизоҷ дар бот Reply кунед — ҷавоби шумо ба Instagram Direct меравад. Тугмаҳои зери паём ботро бозмедоранд ё чатро мекушоянд.",
   "int.tg.reply_https": "Ҷавоб аз Telegram танҳо вақте кор мекунад, ки сайт дар https бошад.",

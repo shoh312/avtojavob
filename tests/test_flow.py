@@ -688,3 +688,41 @@ def test_telegram_two_way(client, monkeypatch):
     with SessionLocal() as db:
         assert db.query(Note).filter(Note.remind_at.is_not(None)).one().reminded
     client.put(f"/api/accounts/{acc}/integrations", json={"tg_notify_all": False}, headers=H)
+
+
+def test_lead_capture_from_direct(client, monkeypatch):
+    from app import services
+    from app.engine import extract_contact_info
+    assert extract_contact_info("raqamim +992 90 123-45-67 ga qo'ng'iroq qiling") == {"phone": "+992 90 123-45-67"}
+    assert extract_contact_info("pochta: ali.v@mail.tj") == {"email": "ali.v@mail.tj"}
+    assert extract_contact_info("narxi 150 000 so'm, 2 dona") == {}
+    assert extract_contact_info("buyurtma #12345") == {}
+
+    acc = S["acc"]
+    for f in client.get(f"/api/flows?account_id={acc}").json()["items"]:
+        client.put(f"/api/flows/{f['id']}", json={"active": False}, headers=H)
+    sent = []
+    monkeypatch.setattr(services, "_tg", lambda token, method, **p: sent.append((method, p)) or {"message_id": 1})
+    seen = {}
+    monkeypatch.setattr(services, "ai_available", lambda db: True)
+    monkeypatch.setattr(services, "ai_reply", lambda db, prompt, h: seen.setdefault("prompt", prompt) and "Rahmat!")
+    client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": True, "ai_collect_leads": True}, headers=H)
+
+    msg = lambda mid, text: {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [  # noqa: E731
+        {"sender": {"id": "lead-1"}, "recipient": {"id": IG_ID}, "timestamp": 1, "message": {"mid": mid, "text": text}}]}]}
+    hook(client, msg(LONG_MID + "l1", "Narxi qancha?"))
+    assert "ask for their phone number" in seen["prompt"]  # AI telefon so'rashga yo'naltirilgan
+    sent.clear()
+    hook(client, msg(LONG_MID + "l2", "Mening raqamim 90 123 45 67"))
+    with SessionLocal() as db:
+        c = db.query(Contact).filter_by(igsid="lead-1").one()
+        assert c.fields["phone"] == "90 123 45 67" and c.stage
+    assert any("🎯" in p.get("text", "") for m, p in sent if m == "sendMessage")
+
+    # telefon olingach — AI qayta so'ramaydi; xuddi shu raqam qayta yozilsa takroriy lid yo'q
+    seen.clear()
+    sent.clear()
+    hook(client, msg(LONG_MID + "l3", "90 123 45 67"))
+    assert "ask for their phone number" not in seen.get("prompt", "")
+    assert not any("🎯" in p.get("text", "") for m, p in sent if m == "sendMessage")
+    client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": False}, headers=H)

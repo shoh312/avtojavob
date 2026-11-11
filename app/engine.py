@@ -143,6 +143,40 @@ def contact_card(contact: Contact, title: str, extra: str = "") -> str:
     return "\n".join(lines)
 
 
+_PHONE = re.compile(r"(?<![\w+])\+?\d[\d\s\-().]{6,18}\d(?!\w)")
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+
+def extract_contact_info(text: str) -> dict:
+    found = {}
+    m = _EMAIL.search(text or "")
+    if m:
+        found["email"] = m.group(0)[:200]
+    for m in _PHONE.finditer(_EMAIL.sub(" ", text or "")):
+        digits = re.sub(r"\D", "", m.group(0))
+        if 9 <= len(digits) <= 15:
+            found["phone"] = m.group(0).strip()[:40]
+            break
+    return found
+
+
+def capture_lead(db: Session, account: IGAccount, contact: Contact, text: str) -> bool:
+    """Direct'dagi telefon/email: kontaktga saqlash, CRM'ga qo'shish, Telegram'ga xabar."""
+    found = {k: v for k, v in extract_contact_info(text).items() if contact.fields.get(k) != v}
+    if not found:
+        return False
+    fields = contact.fields
+    fields.update(found)
+    contact.fields = fields
+    db.commit()
+    log_event(db, account, contact, "answer", text, ", ".join(f"{k} = {v}" for k, v in found.items()))
+    if not contact.stage:
+        crm.set_stage(db, contact, crm.get_stages(account)[0]["id"], "⚡ Direct")
+    if account.tg_notify_leads and account.tg_chat_id:
+        notify_telegram(db, account, contact_card(contact, "🎯 Lead · Direct"), contact)
+    return True
+
+
 def notify_telegram(db: Session, account: IGAccount, text: str, contact: Contact | None = None) -> None:
     tgbot.notify(db, account, text, contact)
 
@@ -529,6 +563,8 @@ def handle_messaging(db: Session, account: IGAccount, event: dict) -> None:
         notify_telegram(db, account, f"{tgbot.t(account, 'new_msg')} · {who}\n\n{text or '[media]'}", contact)
 
     if contact.bot_paused():
+        if text and not postback and not qr:
+            capture_lead(db, account, contact, text)
         return  # operator suhbatni o'z qo'liga olgan
 
     if postback:
@@ -545,6 +581,9 @@ def handle_messaging(db: Session, account: IGAccount, event: dict) -> None:
         kind = "story_reply"
     else:
         kind = "dm"
+
+    if kind == "dm" and text and not db.scalar(select(FlowSession).where(FlowSession.contact_id == contact.id)):
+        capture_lead(db, account, contact, text)
 
     if kind == "dm":
         session = db.scalar(select(FlowSession).where(FlowSession.contact_id == contact.id))
@@ -581,7 +620,10 @@ def ai_answer(db: Session, account: IGAccount, contact: Contact, text: str) -> b
     rows = db.scalars(select(Message).where(Message.contact_id == contact.id, Message.source != "comment")
                       .order_by(Message.id.desc()).limit(12)).all()
     history = [{"role": "user" if m.direction == "in" else "assistant", "content": m.text or "…"} for m in reversed(rows)]
-    answer = services.ai_reply(db, account.ai_prompt, history)
+    prompt = account.ai_prompt
+    if account.ai_collect_leads and not contact.fields.get("phone"):
+        prompt += services.AI_LEAD_RULE
+    answer = services.ai_reply(db, prompt, history)
     if not answer:
         log_event(db, account, contact, "skipped", text, "ai_no_answer")
         return False

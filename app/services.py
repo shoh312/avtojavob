@@ -100,6 +100,13 @@ Business information (written by the owner):
 """
 
 
+AI_LEAD_RULE = """
+
+Lead collection: if the customer shows interest in buying or ordering (asks about price, availability, delivery, \
+how to order), politely ask for their phone number so a manager can contact them — at most once, and don't ask again \
+if they already gave it or refused."""
+
+
 def ai_provider(db: Session) -> str:
     p = get_setting(db, "ai_provider")
     return p if p in AI_PROVIDERS else "gemini"

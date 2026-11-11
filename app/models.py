@@ -57,6 +57,7 @@ class IGAccount(Base):
     # AI yordamchi: hech bir ssenariy mos kelmagan Direct xabarlarga javob beradi
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     ai_prompt: Mapped[str] = mapped_column(Text, default="")
+    ai_collect_leads: Mapped[bool] = mapped_column(Boolean, default=True)
     # Telegram xabarnomalar (foydalanuvchining o'z boti)
     tg_bot_token_enc: Mapped[str] = mapped_column(Text, default="")
     tg_chat_id: Mapped[str] = mapped_column(String(64), default="")
