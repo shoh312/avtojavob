@@ -23,7 +23,7 @@ from .db import SessionLocal
 from .flows import field_key, trigger_of
 from .models import (SEND_KINDS, Broadcast, Contact, EventLog, Flow, FlowSession, IGAccount, Message, NodeStat,
                      ProcessedEvent, ScheduledJob, utcnow)
-from . import crm, services, tgbot
+from . import catalog, crm, services, tgbot
 from .plans import account_owner_active
 from .security import decrypt, encrypt
 
@@ -490,6 +490,11 @@ def handle_answer(db: Session, account: IGAccount, contact: Contact, session: Fl
 
 
 def handle_postback(db: Session, account: IGAccount, contact: Contact, payload: str, title: str, mid: str) -> None:
+    if payload.startswith(catalog.ORDER_PREFIX):
+        pid = payload[len(catalog.ORDER_PREFIX):]
+        if pid.isdigit() and mark_processed(db, f"p:{mid}"):
+            handle_order(db, account, contact, int(pid))
+        return
     if not payload.startswith(FLOW_PREFIX):
         log.info("postback: begona payload %r", payload[:40])
         return
@@ -621,18 +626,51 @@ def ai_answer(db: Session, account: IGAccount, contact: Contact, text: str) -> b
                       .order_by(Message.id.desc()).limit(12)).all()
     history = [{"role": "user" if m.direction == "in" else "assistant", "content": m.text or "…"} for m in reversed(rows)]
     leads = "off" if not account.ai_collect_leads else ("done" if contact.fields.get("phone") else "ask")
-    answer = services.ai_reply(db, account.ai_prompt, history, leads)
+    products = catalog.active_products(db, account.id)
+    answer = services.ai_reply(db, account.ai_prompt, history, leads, catalog.catalog_text(products))
     if not answer:
         log_event(db, account, contact, "skipped", text, "ai_no_answer")
         return False
+    answer, ids = catalog.split_tags(answer)
+    chosen = [p for pid in ids for p in products if p.id == pid]
+    token = decrypt(account.access_token_enc)
     try:
-        ig.send_dm(decrypt(account.access_token_enc), contact.igsid, {"text": answer})
+        if answer:
+            ig.send_dm(token, contact.igsid, {"text": answer})
+        if chosen:
+            ig.send_dm(token, contact.igsid, catalog.product_cards(account, chosen))
     except ig.IGError as e:
         log_event(db, account, contact, "error", text, f"ai_reply → {e}")
         return False
-    log_event(db, account, contact, "ai_reply", text, answer)
-    record_message(db, account.id, contact, "out", answer, "ai")
+    cards = ("  🛍 " + ", ".join(p.name for p in chosen)) if chosen else ""
+    log_event(db, account, contact, "ai_reply", text, answer + cards)
+    record_message(db, account.id, contact, "out", (answer + cards).strip(), "ai")
     return True
+
+
+def handle_order(db: Session, account: IGAccount, contact: Contact, product_id: int) -> None:
+    """Mahsulot kartochkasidagi '🛒 Buyurtma berish' tugmasi."""
+    from .models import Product
+    p = db.get(Product, product_id)
+    if not p or p.account_id != account.id:
+        return
+    fields = contact.fields
+    fields["product"] = p.name[:200]
+    contact.fields = fields
+    db.commit()
+    crm.add_note(db, contact, f"🛒 {p.name}" + (f" — {p.price}" if p.price else ""), "⚡ Instagram")
+    if not contact.stage:
+        crm.set_stage(db, contact, crm.get_stages(account)[0]["id"], "⚡ Instagram")
+    has_phone = bool(contact.fields.get("phone"))
+    reply = catalog.t(account, "thanks" if has_phone else "ask_phone", p=p.name)
+    try:
+        ig.send_dm(decrypt(account.access_token_enc), contact.igsid, {"text": reply})
+        record_message(db, account.id, contact, "out", reply, "ai")
+    except ig.IGError as e:
+        log_event(db, account, contact, "error", p.name, f"order → {e}")
+    log_event(db, account, contact, "click", f"[🛒 {p.name}]", p.name)
+    if account.tg_chat_id:
+        notify_telegram(db, account, contact_card(contact, f"🛒 {p.name}" + (f" — {p.price}" if p.price else "")), contact)
 
 
 def run_broadcast(broadcast_id: int) -> None:

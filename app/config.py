@@ -20,6 +20,7 @@ class Settings:
     GRAPH_VERSION = os.getenv("GRAPH_VERSION", "v23.0")
     HOURLY_SEND_LIMIT = int(os.getenv("HOURLY_SEND_LIMIT", "180"))
     ADMIN_EMAILS = os.getenv("ADMIN_EMAILS", "")
+    UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads"))
 
     @property
     def redirect_uri(self) -> str:

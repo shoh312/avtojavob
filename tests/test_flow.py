@@ -408,7 +408,7 @@ def test_ai_assistant(client, monkeypatch):
     seen = {}
     monkeypatch.setattr(services, "ai_available", lambda db: True)
 
-    def fake_reply(db, prompt, history, leads="off"):
+    def fake_reply(db, prompt, history, leads="off", catalog=""):
         seen["prompt"], seen["history"] = prompt, history
         return "Ish vaqti 9:00–18:00"
     monkeypatch.setattr(services, "ai_reply", fake_reply)
@@ -418,7 +418,7 @@ def test_ai_assistant(client, monkeypatch):
     assert seen["prompt"] == "Dokon: kiyimlar"
     assert seen["history"][-1] == {"role": "user", "content": "Soat nechagacha ishlaysiz?"}
 
-    monkeypatch.setattr(services, "ai_reply", lambda db, p, h, leads="off": None)  # rad etildi / xato
+    monkeypatch.setattr(services, "ai_reply", lambda db, p, h, leads="off", catalog="": None)  # rad etildi / xato
     calls.clear()
     hook(client, text_msg(LONG_MID + "ai2", "???"))
     assert calls == []
@@ -705,7 +705,7 @@ def test_lead_capture_from_direct(client, monkeypatch):
     monkeypatch.setattr(services, "_tg", lambda token, method, **p: sent.append((method, p)) or {"message_id": 1})
     seen = {}
     monkeypatch.setattr(services, "ai_available", lambda db: True)
-    monkeypatch.setattr(services, "ai_reply", lambda db, prompt, h, leads="off": seen.setdefault("leads", leads) and "Rahmat!")
+    monkeypatch.setattr(services, "ai_reply", lambda db, prompt, h, leads="off", catalog="": seen.setdefault("leads", leads) and "Rahmat!")
     client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": True, "ai_collect_leads": True}, headers=H)
 
     msg = lambda mid, text: {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [  # noqa: E731
@@ -727,4 +727,67 @@ def test_lead_capture_from_direct(client, monkeypatch):
     hook(client, msg(LONG_MID + "l3", "90 123 45 67"))
     assert seen.get("leads") == "done"
     assert not any("🎯" in p.get("text", "") for m, p in sent if m == "sendMessage")
+    client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": False}, headers=H)
+
+
+def test_product_catalog(client, monkeypatch):
+    from app import catalog, services
+    acc = S["acc"]
+    for f in client.get(f"/api/flows?account_id={acc}").json()["items"]:
+        client.put(f"/api/flows/{f['id']}", json={"active": False}, headers=H)
+
+    # rasm yuklash
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 100
+    r = client.post("/api/uploads", files={"file": ("a.png", png, "image/png")}, headers=H).json()
+    assert r["image"].endswith(".png") and "/uploads/" in r["image_url"]
+    assert client.get(f"/uploads/{r['image']}").status_code == 200
+    bad = client.post("/api/uploads", files={"file": ("a.png", b"<html>", "image/png")}, headers=H).json()
+    assert bad["error"] == "bad_image"
+
+    p1 = client.post("/api/products", json={"account_id": acc, "name": "Cyberlab", "price": "100$",
+                                            "description": "Telegram bot, 7 kun", "image": r["image"],
+                                            "url": "https://cyberlab.tj"}, headers=H).json()
+    p2 = client.post("/api/products", json={"account_id": acc, "name": "Feff", "price": "50$"}, headers=H).json()
+    assert client.post("/api/products", json={"account_id": acc, "name": ""}, headers=H).json()["error"] == "product_name"
+    assert client.put(f"/api/products/{p2['id']}", json={"url": "feff.tj"}, headers=H).json()["error"] == "button_url"
+    items = client.get(f"/api/products?account_id={acc}").json()["items"]
+    assert [p["name"] for p in items] == ["Cyberlab", "Feff"]
+
+    # AI katalogni oladi va teg qo'yadi -> mahsulot kartochkasi
+    seen = {}
+    monkeypatch.setattr(services, "ai_available", lambda db: True)
+
+    def fake_reply(db, prompt, history, leads="off", catalog=""):
+        seen["catalog"] = catalog
+        return f"Cyberlab 100$ turadi. [[product:{p1['id']}]]"
+    monkeypatch.setattr(services, "ai_reply", fake_reply)
+    client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": True}, headers=H)
+    calls.clear()
+    msg = {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [
+        {"sender": {"id": "shop-1"}, "recipient": {"id": IG_ID}, "timestamp": 1, "message": {"mid": LONG_MID + "p1", "text": "Cyberlab narxi?"}}]}]}
+    hook(client, msg)
+    assert f"[id {p1['id']}] Cyberlab — 100$: Telegram bot, 7 kun" in seen["catalog"] and "Feff — 50$" in seen["catalog"]
+    assert calls[0] == ("dm", "shop-1", {"text": "Cyberlab 100$ turadi."})
+    card = calls[1][2]["attachment"]["payload"]
+    assert card["template_type"] == "generic"
+    el = card["elements"][0]
+    assert el["title"] == "Cyberlab" and el["subtitle"].startswith("100$") and el["image_url"].endswith(r["image"])
+    assert el["buttons"][0] == {"type": "postback", "title": "🛒 Buyurtma berish", "payload": f"O:{p1['id']}"}
+    assert el["buttons"][1]["url"] == "https://cyberlab.tj"
+
+    # buyurtma tugmasi -> CRM, mahsulot maydoni, telefon so'rash
+    calls.clear()
+    hook(client, {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [
+        {"sender": {"id": "shop-1"}, "recipient": {"id": IG_ID}, "timestamp": 1,
+         "postback": {"mid": LONG_MID + "p2", "title": "🛒 Buyurtma berish", "payload": f"O:{p1['id']}"}}]}]})
+    assert "telefon raqamingizni" in calls[-1][2]["text"]
+    with SessionLocal() as db:
+        c = db.query(Contact).filter_by(igsid="shop-1").one()
+        assert c.fields["product"] == "Cyberlab" and c.stage
+
+    # teglarni ajratish
+    assert catalog.split_tags("Mana [[product:3]] va [[ Product : 5 ]]") == ("Mana  va", [3, 5])
+    assert client.post(f"/api/accounts/{acc}/ai/test", json={"message": "narx?"}, headers=H).json()["products"][0]["name"] == "Cyberlab"
+    client.delete(f"/api/products/{p2['id']}", headers=H)
+    assert len(client.get(f"/api/products?account_id={acc}").json()["items"]) == 1
     client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": False}, headers=H)

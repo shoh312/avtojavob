@@ -14,7 +14,7 @@ from urllib.parse import quote, urlencode
 import httpx
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from fastapi import BackgroundTasks, Body, Depends, FastAPI, Form, HTTPException, Request
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, RedirectResponse,
                                StreamingResponse)
 from fastapi.staticfiles import StaticFiles
@@ -24,14 +24,14 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import instagram as ig
-from . import crm, services, tgbot
+from . import catalog, crm, services, tgbot
 from .config import settings
 from .db import get_db, init_db
 from .engine import (broadcast_audience, log_event, process_payload, record_message, refresh_expiring_tokens,
                      resubscribe_all, run_broadcast, run_due_jobs, run_due_reminders)
 from .flows import blank_graph, build_template, list_templates, trigger_of, validate_graph
 from .models import (LANGS, SEND_KINDS, Broadcast, Contact, EventLog, Flow, IGAccount, Message, NodeStat, Note,
-                     PlanGrant, User, utcnow)
+                     PlanGrant, Product, User, utcnow)
 from .plans import (PLANS, TRIAL_DAYS, accounts_limit, get_setting, is_active, plan_json, plans_public,
                     set_setting)
 from .security import (decrypt, encrypt, hash_password, parse_signed_request, verify_password,
@@ -41,6 +41,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("app")
 
 WEB_DIR = Path(__file__).parent / "web"
+UPLOAD_DIR = Path(settings.UPLOAD_DIR)
 
 
 async def _background_loops():
@@ -1109,10 +1110,13 @@ def ai_test(account_id: int, body: dict = Body(...), user: User = Depends(curren
         err("empty")
     prompt = str(body.get("prompt") if body.get("prompt") is not None else acc.ai_prompt)
     collect = body.get("collect_leads") if body.get("collect_leads") is not None else acc.ai_collect_leads
-    answer = services.ai_reply(db, prompt, [{"role": "user", "content": question}], "ask" if collect else "off")
+    products = catalog.active_products(db, acc.id)
+    answer = services.ai_reply(db, prompt, [{"role": "user", "content": question}], "ask" if collect else "off",
+                               catalog.catalog_text(products))
     if not answer:
         err("ai_failed")
-    return {"answer": answer}
+    text, ids = catalog.split_tags(answer)
+    return {"answer": text, "products": [_product_json(p) for pid in ids for p in products if p.id == pid]}
 
 
 # ---------------------------------------------------------------- jonli chat (Inbox)
@@ -1239,6 +1243,97 @@ def broadcasts_create(body: dict = Body(...), user: User = Depends(current_user)
     db.commit()
     threading.Thread(target=run_broadcast, args=(b.id,), daemon=True).start()
     return _broadcast_json(b)
+
+
+# ---------------------------------------------------------------- mahsulot katalogi
+
+def _product_json(p: Product) -> dict:
+    return {"id": p.id, "name": p.name, "price": p.price, "description": p.description, "image": p.image,
+            "image_url": catalog.image_url(p), "url": p.url, "active": p.active, "sort": p.sort}
+
+
+def _owned_product(db: Session, user: User, product_id: int) -> Product:
+    p = db.get(Product, product_id)
+    if not p or db.get(IGAccount, p.account_id).user_id != user.id:
+        err("not_found", 404)
+    return p
+
+
+def _apply_product(p: Product, body: dict) -> None:
+    if "name" in body:
+        name = str(body["name"] or "").strip()[:80]
+        if not name:
+            err("product_name")
+        p.name = name
+    for key, limit in (("price", 60), ("description", 1000)):
+        if key in body:
+            setattr(p, key, str(body[key] or "").strip()[:limit])
+    for key in ("image", "url"):
+        if key in body:
+            val = str(body[key] or "").strip()[:500]
+            if val and key == "url" and not val.startswith(("https://", "http://")):
+                err("button_url")
+            setattr(p, key, val)
+    if "active" in body:
+        p.active = bool(body["active"])
+    if "sort" in body:
+        p.sort = int(body["sort"] or 0)
+
+
+@app.get("/api/products")
+def products_list(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    rows = db.scalars(select(Product).where(Product.account_id == acc.id).order_by(Product.sort, Product.id)).all()
+    return {"items": [_product_json(p) for p in rows]}
+
+
+@app.post("/api/products")
+def product_create(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, int(body.get("account_id") or 0))
+    if db.scalar(select(func.count(Product.id)).where(Product.account_id == acc.id)) >= 100:
+        err("too_many")
+    p = Product(account_id=acc.id, name="")
+    _apply_product(p, {"name": body.get("name"), **body})
+    db.add(p)
+    db.commit()
+    return _product_json(p)
+
+
+@app.put("/api/products/{product_id}")
+def product_update(product_id: int, body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    p = _owned_product(db, user, product_id)
+    _apply_product(p, body)
+    db.commit()
+    return _product_json(p)
+
+
+@app.delete("/api/products/{product_id}")
+def product_delete(product_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    p = _owned_product(db, user, product_id)
+    if p.image and not p.image.startswith("http"):
+        (UPLOAD_DIR / p.image).unlink(missing_ok=True)
+    db.delete(p)
+    db.commit()
+    return {"ok": True}
+
+
+IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+
+
+@app.post("/api/uploads")
+async def upload_image(file: UploadFile = File(...), user: User = Depends(current_user)):
+    ext = IMAGE_TYPES.get(file.content_type or "")
+    if not ext:
+        err("bad_image")
+    data = await file.read(5 * 1024 * 1024 + 1)
+    if len(data) > 5 * 1024 * 1024:
+        err("image_too_large")
+    # Fayl haqiqatan rasm ekanini sarlavhasidan tekshiramiz
+    if not (data.startswith(b"\xff\xd8") or data.startswith(b"\x89PNG") or data[8:12] == b"WEBP"):
+        err("bad_image")
+    name = f"{user.id}-{secrets.token_hex(10)}{ext}"
+    (UPLOAD_DIR / name).write_bytes(data)
+    return {"image": name, "image_url": f"{settings.APP_URL}/uploads/{name}"}
 
 
 # ---------------------------------------------------------------- CRM
@@ -1391,13 +1486,16 @@ def health(db: Session = Depends(get_db)):
 
 # ---------------------------------------------------------------- React ilova (SPA)
 
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
 if (WEB_DIR / "assets").is_dir():
     app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
 
 
 @app.get("/{path:path}", include_in_schema=False)
 def spa(path: str):
-    if path.startswith(("api/", "webhook", "auth/google", "tg/")):
+    if path.startswith(("api/", "webhook", "auth/google", "tg/", "uploads/")):
         return JSONResponse({"error": "not_found"}, status_code=404)
     static = (WEB_DIR / path).resolve()
     if path and static.is_file() and WEB_DIR.resolve() in static.parents:

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { Activity, BarChart3, Blocks, KanbanSquare, Check, ChevronsUpDown, CreditCard, Home, Inbox, Instagram, LogOut, MailWarning, Megaphone, Menu, Plus, Settings, SlidersHorizontal, UserCog, Users, Workflow, X } from 'lucide-react'
+import { Activity, BarChart3, Blocks, KanbanSquare, ShoppingBag, Check, ChevronsUpDown, CreditCard, Home, Inbox, Instagram, LogOut, MailWarning, Megaphone, Menu, Plus, Settings, SlidersHorizontal, UserCog, Users, Workflow, X } from 'lucide-react'
 import { useAuth } from '../auth'
 import { useI18n, type TKey } from '../i18n'
 import { api } from '../api'
@@ -12,6 +12,7 @@ const NAV: { to: string; key: TKey; icon: typeof Home; end?: boolean }[] = [
   { to: '/app', key: 'nav.home', icon: Home, end: true },
   { to: '/app/inbox', key: 'nav.inbox', icon: Inbox },
   { to: '/app/crm', key: 'nav.crm', icon: KanbanSquare },
+  { to: '/app/products', key: 'nav.products', icon: ShoppingBag },
   { to: '/app/flows', key: 'nav.flows', icon: Workflow },
   { to: '/app/contacts', key: 'nav.contacts', icon: Users },
   { to: '/app/broadcasts', key: 'nav.broadcasts', icon: Megaphone },

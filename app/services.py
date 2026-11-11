@@ -192,28 +192,40 @@ def _claude(db: Session, system: str, history: list[dict]) -> tuple[str | None, 
     return text or None, None if text else "empty answer"
 
 
-def build_system(business_prompt: str, leads: str = "off") -> str:
+AI_CATALOG = """- The business has a product catalog (below). When the customer asks about price or products without saying \
+which one, and there are several, briefly list the product names and ask which one they mean.
+- When you talk about specific products, put their tags at the very end of your reply, e.g. [[product:12]] \
+(at most 3). The customer will automatically get a card with the photo, price and an "Order" button — don't paste \
+links or repeat all details yourself.
+"""
+
+
+def build_system(business_prompt: str, leads: str = "off", catalog: str = "") -> str:
     """leads: off | ask (telefon so'rash) | done (telefon allaqachon olingan)."""
     rules = {"ask": AI_LEADS, "done": AI_LEADS_DONE}.get(leads, AI_NO_LEADS)
-    return AI_RULES + rules + AI_BUSINESS + (business_prompt.strip() or "(no information provided)")
+    out = AI_RULES + rules + (AI_CATALOG if catalog else "") + AI_BUSINESS + (business_prompt.strip() or "(no information provided)")
+    if catalog:
+        out += "\n\nProduct catalog:\n" + catalog
+    return out
 
 
-def ai_generate(db: Session, business_prompt: str, history: list[dict], leads: str = "off") -> tuple[str | None, str | None]:
+def ai_generate(db: Session, business_prompt: str, history: list[dict], leads: str = "off",
+                catalog: str = "") -> tuple[str | None, str | None]:
     """(javob, xato). history: [{"role": "user"|"assistant", "content": str}, ...] — oxirgisi mijozniki."""
     if not ai_available(db):
         return None, "not configured"
     history = _clean_history(history)
     if not history:
         return None, "empty history"
-    system = build_system(business_prompt, leads)
+    system = build_system(business_prompt, leads, catalog)
     text, error = (_gemini if ai_provider(db) == "gemini" else _claude)(db, system, history)
     if error:
         log.warning("AI (%s): %s", ai_provider(db), error)
     return (text[:950] if text else None), error
 
 
-def ai_reply(db: Session, business_prompt: str, history: list[dict], leads: str = "off") -> str | None:
-    return ai_generate(db, business_prompt, history, leads)[0]
+def ai_reply(db: Session, business_prompt: str, history: list[dict], leads: str = "off", catalog: str = "") -> str | None:
+    return ai_generate(db, business_prompt, history, leads, catalog)[0]
 
 
 # ---------------------------------------------------------------- Telegram

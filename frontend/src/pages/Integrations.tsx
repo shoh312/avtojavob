@@ -5,6 +5,7 @@ import { useAuth } from '../auth'
 import { useI18n, type TKey } from '../i18n'
 import { Button, PageHeader, Spinner, Toggle, useToast } from '../components/ui'
 import { Onboarding } from './Home'
+import { ProductCard, type Product } from './Products'
 
 type Integ = {
   ai_enabled: boolean; ai_prompt: string; ai_available: boolean; ai_collect_leads: boolean
@@ -20,6 +21,7 @@ export default function Integrations() {
   const [token, setToken] = useState('')
   const [question, setQuestion] = useState('')
   const [answer, setAnswer] = useState('')
+  const [cards, setCards] = useState<Product[]>([])
   const [busy, setBusy] = useState('')
 
   useEffect(() => {
@@ -73,11 +75,12 @@ export default function Integrations() {
             <div className="flex gap-2">
               <input className="input flex-1" value={question} placeholder={t('int.ai.test_ph')} onChange={e => setQuestion(e.target.value)} />
               <Button size="md" variant="dark" loading={busy === 'ai'} disabled={!question.trim() || !d.ai_available}
-                onClick={() => run('ai', async () => setAnswer((await api.post<{ answer: string }>(`${base}/ai/test`, { message: question, prompt, collect_leads: d.ai_collect_leads })).answer))}>
+                onClick={() => run('ai', async () => { const r = await api.post<{ answer: string; products: Product[] }>(`${base}/ai/test`, { message: question, prompt, collect_leads: d.ai_collect_leads }); setAnswer(r.answer); setCards(r.products || []) })}>
                 <Bot className="h-4 w-4" />{t('int.ai.test')}
               </Button>
             </div>
             {answer && <div className="mt-3 max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-bl-md bg-white px-3.5 py-2.5 text-[14px] shadow-card">{answer}</div>}
+            {cards.length > 0 && <div className="scrollbar-thin mt-2 flex gap-2 overflow-x-auto pb-1">{cards.map(p => <ProductCard key={p.id} p={p} compact />)}</div>}
           </div>
         </section>
 

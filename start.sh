@@ -58,7 +58,7 @@ mkdir -p "$APP_DIR"
 if [ "$SRC_DIR" != "$APP_DIR" ]; then
     rsync -a --delete \
         --exclude '.git' --exclude 'venv' --exclude '.env' --exclude '*.db' \
-        --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.log' \
+        --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.log' --exclude 'uploads' \
         "$SRC_DIR"/ "$APP_DIR"/
 fi
 ok "Kod ko'chirildi"
