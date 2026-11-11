@@ -208,6 +208,7 @@ def handle_text_message(db: Session, account: IGAccount, sender_id: str, message
 def handle_postback(db: Session, account: IGAccount, sender_id: str, postback: dict) -> None:
     payload = postback.get("payload") or ""
     if not payload.startswith(GATE_PREFIX):
+        log.info("postback: begona payload %r — o'tkazildi", payload[:40])
         return
     try:
         rule_id = int(payload[len(GATE_PREFIX):])
@@ -215,9 +216,11 @@ def handle_postback(db: Session, account: IGAccount, sender_id: str, postback: d
         return
     rule = db.get(Rule, rule_id)
     if not rule or rule.account_id != account.id or not rule.active:
+        log.info("postback: qoida #%s topilmadi yoki o'chirilgan", rule_id)
         return
     mid = postback.get("mid") or f"{sender_id}:{payload}:{utcnow().timestamp()}"
     if not mark_processed(db, f"p:{mid}"):
+        log.info("postback: takroriy (%s)", mid[:30])
         return
     clicked = f"[{postback.get('title') or 'tugma'}]"
     if _over_limit(db, account, rule, "", clicked):
@@ -300,6 +303,7 @@ def resubscribe_all() -> None:
         for acc in db.scalars(select(IGAccount)).all():
             try:
                 ig.subscribe_webhooks(decrypt(acc.access_token_enc))
+                log.info("resubscribe @%s: ok (comments, messages, messaging_postbacks)", acc.username)
             except Exception as e:  # noqa: BLE001
                 log.warning("resubscribe @%s: %s", acc.username, e)
     finally:

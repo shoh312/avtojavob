@@ -430,6 +430,24 @@ def webhook_verify(request: Request):
     return PlainTextResponse("Forbidden", status_code=403)
 
 
+def _webhook_summary(payload: dict) -> str:
+    """Logga qisqa: qaysi akkauntga qanday hodisa keldi (matnlarsiz)."""
+    parts = []
+    for entry in payload.get("entry", []) if isinstance(payload, dict) else []:
+        kinds = [c.get("field", "?") for c in entry.get("changes", [])]
+        for ev in entry.get("messaging", []):
+            if "postback" in ev:
+                kinds.append(f"postback({(ev['postback'].get('payload') or '')[:20]})")
+            elif (ev.get("message") or {}).get("is_echo"):
+                kinds.append("echo")
+            elif "message" in ev:
+                kinds.append("message")
+            else:
+                kinds.append("+".join(k for k in ev if k not in ("sender", "recipient", "timestamp")) or "?")
+        parts.append(f"{entry.get('id')}: {', '.join(kinds) or '-'}")
+    return f"object={payload.get('object')} " + "; ".join(parts)
+
+
 @app.post("/webhook")
 async def webhook_receive(request: Request, background: BackgroundTasks):
     body = await request.body()
@@ -440,6 +458,7 @@ async def webhook_receive(request: Request, background: BackgroundTasks):
         payload = json.loads(body)
     except json.JSONDecodeError:
         return PlainTextResponse("Bad JSON", status_code=400)
+    log.info("webhook: %s", _webhook_summary(payload))
     background.add_task(process_payload, payload)
     return PlainTextResponse("EVENT_RECEIVED")
 
