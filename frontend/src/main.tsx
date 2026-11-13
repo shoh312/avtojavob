@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import '@xyflow/react/dist/style.css'
 import './index.css'
 import { I18nProvider } from './i18n'
@@ -11,7 +11,6 @@ import Landing from './pages/Landing'
 import AuthPage from './pages/Auth'
 import Home from './pages/Home'
 import Flows from './pages/Flows'
-import Contacts from './pages/Contacts'
 import FlowAnalytics from './pages/FlowAnalytics'
 import Activity from './pages/Activity'
 import Accounts from './pages/Accounts'
@@ -21,7 +20,8 @@ import Billing from './pages/Billing'
 import Inbox from './pages/Inbox'
 import Broadcasts from './pages/Broadcasts'
 import Integrations from './pages/Integrations'
-import Crm from './pages/Crm'
+import CrmHub from './pages/crm/Hub'
+
 import Products from './pages/Products'
 import Team from './pages/Team'
 import { Forgot, Reset } from './pages/Recover'
@@ -49,6 +49,13 @@ function GuestOnly({ children }: { children: JSX.Element }) {
   return children
 }
 
+/** Eski /app/contacts havolalari CRM ro'yxatiga. */
+function ToCrmList() {
+  const p = new URLSearchParams(useLocation().search)
+  p.set('view', 'list')
+  return <Navigate to={`/app/crm?${p}`} replace />
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <I18nProvider>
@@ -66,13 +73,13 @@ createRoot(document.getElementById('root')!).render(
                 <Route index element={<Home />} />
                 <Route path="flows" element={<Flows />} />
                 <Route path="flows/:id/analytics" element={<FlowAnalytics />} />
-                <Route path="contacts" element={<Contacts />} />
+                <Route path="contacts" element={<ToCrmList />} />
                 <Route path="activity" element={<Activity />} />
                 <Route path="accounts" element={<Accounts />} />
                 <Route path="settings" element={<Settings />} />
                 <Route path="billing" element={<Billing />} />
                 <Route path="inbox" element={<Inbox />} />
-                <Route path="crm" element={<Crm />} />
+                <Route path="crm" element={<CrmHub />} />
                 <Route path="products" element={<Products />} />
                 <Route path="team" element={<Team />} />
                 <Route path="broadcasts" element={<Broadcasts />} />

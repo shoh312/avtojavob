@@ -4,9 +4,8 @@ import { AlarmClock, ArrowDown, ArrowUp, KanbanSquare, MessageCircle, Phone, Plu
 import { api, ApiError, type Contact } from '../api'
 import { useAuth } from '../auth'
 import { useI18n, useTimeAgo, type TKey } from '../i18n'
-import { Avatar, Button, Modal, PageHeader, Spinner, useToast } from '../components/ui'
+import { Avatar, Button, Modal, Spinner, useToast } from '../components/ui'
 import { fmtNum } from '../components/charts'
-import { Onboarding } from './Home'
 
 export type Stage = { id: string; name: string; color: string; type: 'open' | 'won' | 'lost' }
 type TeamOpt = { id: number; name: string; role: 'owner' | 'manager' | 'ai' }
@@ -166,7 +165,8 @@ function StagesModal({ stages, accountId, onClose, onSaved }: { stages: Stage[];
   )
 }
 
-export default function Crm() {
+/** Bitimlar doskasi (Kanban). CRM markazining bir ko'rinishi. */
+export function Board({ onChanged }: { onChanged?: () => void }) {
   const { t } = useI18n()
   const ago = useTimeAgo()
   const toast = useToast()
@@ -186,7 +186,7 @@ export default function Crm() {
   }, [account, q, assigned])
   useEffect(() => { const timer = setTimeout(load, 200); return () => clearTimeout(timer) }, [load])
 
-  if (!account) return <Onboarding />
+  if (!account) return null
   if (!board) return <Spinner />
 
   const drop = async (e: DragEvent, stageId: string) => {
@@ -197,23 +197,14 @@ export default function Crm() {
     if (!card || card.stage === stageId) return
     setBoard(b => b && { ...b, cards: b.cards.map(c => (c.id === id ? { ...c, stage: stageId } : c)) })  // darhol ko'rinsin
     try { await api.patch(`/api/contacts/${id}`, { stage: stageId }) } catch { toast(t('common.error'), 'error') }
-    load()
+    load(); onChanged?.()
   }
   const openSum = board.stages.filter(s => s.type === 'open').reduce((a, s) => a + (board.totals[s.id]?.sum || 0), 0)
   const wonSum = board.stages.filter(s => s.type === 'won').reduce((a, s) => a + (board.totals[s.id]?.sum || 0), 0)
 
   return (
     <>
-      <PageHeader title={t('crm.title')} sub={t('crm.sub')} action={
-        <div className="flex items-center gap-3">
-          <div className="hidden text-right sm:block">
-            <div className="text-[12px] text-ink-3">{t('crm.pipeline_sum')} · <b className="text-ink">{fmtNum(openSum)}</b></div>
-            <div className="text-[12px] text-ink-3">{t('crm.won_sum')} · <b className="text-emerald-600">{fmtNum(wonSum)}</b></div>
-          </div>
-          <Button variant="secondary" onClick={() => setSettings(true)}><Settings2 className="h-4 w-4" />{t('crm.settings')}</Button>
-        </div>} />
-
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="relative sm:w-72">
           <Search className="absolute left-3.5 top-3 h-4 w-4 text-ink-4" />
           <input className="input pl-10" value={q} placeholder={t('ct.search')} onChange={e => setQ(e.target.value)} />
@@ -226,13 +217,18 @@ export default function Crm() {
             {board.team.map(m => <option key={m.id} value={m.id}>{m.role === 'ai' ? '🤖 ' : ''}{m.name}</option>)}
           </select>
         )}
+        <div className="flex items-center gap-4 sm:ml-auto">
+          <div className="text-[12.5px] text-ink-3">{t('crm.pipeline_sum')} <b className="tabular-nums text-ink">{fmtNum(openSum)}</b></div>
+          <div className="text-[12.5px] text-ink-3">{t('crm.won_sum')} <b className="tabular-nums text-emerald-600">{fmtNum(wonSum)}</b></div>
+          <button onClick={() => setSettings(true)} title={t('crm.settings')} className="grid h-9 w-9 place-items-center rounded-xl text-ink-3 ring-1 ring-line hover:bg-white hover:text-ink"><Settings2 className="h-4 w-4" /></button>
+        </div>
       </div>
 
       {board.cards.length === 0 && !q && !assigned && (
         <div className="mb-4 rounded-2xl border border-dashed border-line bg-white px-4 py-3 text-[13.5px] text-ink-3">{t('crm.add_hint')}</div>
       )}
 
-      <div className="scrollbar-thin -mx-4 flex gap-3 overflow-x-auto px-4 pb-4 sm:-mx-8 sm:px-8">
+      <div className="scrollbar-thin flex gap-3 overflow-x-auto pb-4">
         {board.stages.map(s => {
           const cards = board.cards.filter(c => c.stage === s.id)
           const tot = board.totals[s.id] || { count: 0, sum: 0 }
@@ -289,8 +285,8 @@ export default function Crm() {
         })}
       </div>
 
-      {open !== null && <ContactPanel id={open} onClose={() => setOpen(null)} onChanged={load} />}
-      {settings && <StagesModal stages={board.stages} accountId={account.id} onClose={() => setSettings(false)} onSaved={load} />}
+      {open !== null && <ContactPanel id={open} onClose={() => setOpen(null)} onChanged={() => { load(); onChanged?.() }} />}
+      {settings && <StagesModal stages={board.stages} accountId={account.id} onClose={() => setSettings(false)} onSaved={() => { load(); onChanged?.() }} />}
     </>
   )
 }

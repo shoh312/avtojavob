@@ -1039,3 +1039,38 @@ def test_activity_filters(client):
     assert "stats" not in older and all(i["id"] < last for i in older["items"])
     fid = next(i["flow_id"] for i in r["items"] if i["flow_id"])
     assert all(i["flow_id"] == fid for i in client.get(f"/api/activity?account_id={acc}&flow={fid}").json()["items"])
+
+
+def test_crm_workspace(client):
+    acc = S["acc"]
+    c1 = client.post("/api/contacts", json={"account_id": acc, "name": "Qo'lda Mijoz", "phone": "+992 900 11 22 33",
+                                            "deal_value": 500}, headers=H).json()
+    assert c1["manual"] and c1["fields"]["phone"] and c1["stage"]
+    c2 = client.post("/api/contacts", json={"account_id": acc, "name": "Ikkinchi", "phone": "900112233"}, headers=H).json()
+    dup = client.get(f"/api/crm/duplicates?account_id={acc}").json()["groups"]
+    assert any({c1["id"], c2["id"]} <= {i["id"] for i in g["items"]} for g in dup)
+
+    r = client.get(f"/api/crm/clients?account_id={acc}&list=leads").json()
+    assert r["funnel"]["total"] >= r["funnel"]["leads"] >= 2 and all(("phone" in i["fields"]) or ("email" in i["fields"]) for i in r["items"])
+    assert client.get(f"/api/crm/clients?account_id={acc}&q=Qo'lda").json()["total"] == 1
+    assert client.get(f"/api/crm/clients?account_id={acc}&period=today").json()["funnel"]["manual"] >= 2
+
+    # vazifa
+    when = (utcnow() - timedelta(hours=1)).isoformat()
+    client.post(f"/api/contacts/{c1['id']}/notes", json={"text": "Qo'ng'iroq qilish", "remind_at": when}, headers=H)
+    s = client.get(f"/api/crm/summary?account_id={acc}").json()
+    assert s["overdue"] >= 1 and s["urgent"] >= 1 and s["duplicates"] >= 1
+    task = next(i for i in client.get(f"/api/crm/tasks?account_id={acc}").json()["items"] if i["text"] == "Qo'ng'iroq qilish")
+    client.patch(f"/api/notes/{task['id']}", json={"done": True}, headers=H)
+    assert any(i["id"] == task["id"] for i in client.get(f"/api/crm/tasks?account_id={acc}&done=1").json()["items"])
+    assert client.delete(f"/api/notes/{task['id']}", headers=H).json()["ok"]
+
+    # teglar
+    client.patch(f"/api/contacts/{c1['id']}", json={"tags": ["vip", "eski"]}, headers=H)
+    assert client.post("/api/crm/tags", json={"account_id": acc, "from": "eski", "to": "doimiy"}, headers=H).json()["changed"] == 1
+    tags = {i["tag"]: i["count"] for i in client.get(f"/api/crm/tags?account_id={acc}").json()["items"]}
+    assert "doimiy" in tags and "eski" not in tags
+    client.post("/api/crm/tags", json={"account_id": acc, "from": "vip"}, headers=H)
+
+    rep = client.get(f"/api/crm/report?account_id={acc}&days=7").json()
+    assert rep["new"] >= 2 and len(rep["series"]["new"]) == 7 and rep["stages"] and rep["people"]

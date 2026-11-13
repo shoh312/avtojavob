@@ -2,6 +2,7 @@ import asyncio
 import csv
 import io
 import json
+import re
 import logging
 import secrets
 import threading
@@ -201,7 +202,8 @@ def contact_json(c: Contact) -> dict:
             "fields": c.fields, "follows": c.follows, "last_seen_at": iso(c.last_seen_at),
             "created_at": iso(c.created_at), "stage": c.stage, "deal_value": c.deal_value or 0,
             "last_message_preview": c.last_message_preview, "last_message_at": iso(c.last_message_at),
-            "assigned_to": c.assigned_to, "assignee": (c.assignee.name or c.assignee.email) if c.assignee else None}
+            "assigned_to": c.assigned_to, "assignee": (c.assignee.name or c.assignee.email) if c.assignee else None,
+            "manual": c.igsid.startswith("manual:"), "unread": c.unread or 0}
 
 
 def detect_lang(request: Request) -> str:
@@ -1662,6 +1664,272 @@ def crm_board(account_id: int, q: str = "", assigned: str = "", user: User = Dep
             "cards": [{**contact_json(c), "notes": notes.get(c.id, 0), "next_reminder": iso(reminders.get(c.id))}
                       for c in cards],
             "team": _team_options(db, user)}
+
+
+STALE_DAYS = 3
+LEAD_LIKE = (Contact.fields_json.like('%"phone"%'), Contact.fields_json.like('%"email"%'))
+
+
+def _phone_key(v: str) -> str:
+    d = re.sub(r"\D", "", v or "")
+    return d[-9:] if len(d) >= 7 else ""
+
+
+def _crm_lists(acc: IGAccount, stmt):
+    """Ro'yxat filtrlari: lidlar, e'tibor kerak, unutilganlar."""
+    stages = crm.get_stages(acc)
+    open_ids = [s["id"] for s in stages if s["type"] == "open"]
+    stale = utcnow() - timedelta(days=STALE_DAYS)
+    return {
+        "leads": stmt.where(or_(*LEAD_LIKE)),
+        "attention": stmt.where(Contact.unread > 0),
+        "forgotten": stmt.where(Contact.stage.in_(open_ids),
+                                func.coalesce(Contact.last_message_at, Contact.last_seen_at) < stale),
+    }
+
+
+def _count(db: Session, stmt) -> int:
+    return db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+
+
+def _tasks_stmt(acc: IGAccount, user: User):
+    stmt = select(Note).where(Note.account_id == acc.id, Note.remind_at.is_not(None))
+    if user.is_manager:
+        stmt = stmt.where(or_(Note.created_by == user.id, Note.contact_id.in_(
+            select(Contact.id).where(Contact.assigned_to == user.id))))
+    return stmt
+
+
+def _duplicate_groups(db: Session, acc: IGAccount) -> list[list[Contact]]:
+    groups: dict[str, list[Contact]] = {}
+    for c in db.scalars(select(Contact).where(Contact.account_id == acc.id, Contact.fields_json.like('%"phone"%'))):
+        k = _phone_key(c.fields.get("phone", ""))
+        if k:
+            groups.setdefault(k, []).append(c)
+    return [g for g in groups.values() if len(g) > 1]
+
+
+@app.get("/api/crm/summary")
+def crm_summary(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    base = select(Contact.id).where(Contact.account_id == acc.id)
+    lists = _crm_lists(acc, base)
+    end_today = datetime.combine(utcnow().date() + timedelta(days=1), datetime.min.time())
+    tasks = _tasks_stmt(acc, user).where(Note.done.is_(False))
+    tags: set[str] = set()
+    for (tj,) in db.execute(select(Contact.tags_json).where(Contact.account_id == acc.id, Contact.tags_json != "[]")):
+        try:
+            tags.update(json.loads(tj or "[]"))
+        except ValueError:
+            pass
+    stages = crm.get_stages(acc)
+    return {"clients": _count(db, base), "leads": _count(db, lists["leads"]), "attention": _count(db, lists["attention"]),
+            "forgotten": _count(db, lists["forgotten"]),
+            "deals": _count(db, base.where(Contact.stage.in_([s["id"] for s in stages]))),
+            "tasks": _count(db, tasks), "urgent": _count(db, tasks.where(Note.remind_at < end_today)),
+            "overdue": _count(db, tasks.where(Note.remind_at < utcnow())),
+            "tags": len(tags), "duplicates": len(_duplicate_groups(db, acc)),
+            "ai_collect_leads": acc.ai_collect_leads, "ai_enabled": acc.ai_enabled}
+
+
+@app.get("/api/crm/clients")
+def crm_clients(account_id: int, q: str = "", period: str = "all", list: str = "", stage: str = "",
+                assigned: str = "", tag: str = "", flow: int = 0, page: int = 1,
+                user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    stmt = _contacts_query(db, acc, q.strip().lstrip("@"), tag.strip(), flow)
+    now = utcnow()
+    since = {"today": datetime.combine(now.date(), datetime.min.time()), "week": now - timedelta(days=7),
+             "month": now - timedelta(days=30)}.get(period)
+    if since:
+        stmt = stmt.where(Contact.created_at >= since)
+    stages = crm.get_stages(acc)
+    won_ids = [s["id"] for s in stages if s["type"] == "won"]
+    funnel = {"total": _count(db, stmt), "leads": _count(db, stmt.where(or_(*LEAD_LIKE))),
+              "clients": _count(db, stmt.where(Contact.stage.in_(won_ids))),
+              "manual": _count(db, stmt.where(Contact.igsid.like("manual:%")))}
+    if list in ("leads", "attention", "forgotten"):
+        stmt = _crm_lists(acc, stmt)[list]
+    if stage == "none":
+        stmt = stmt.where(Contact.stage.is_(None))
+    elif stage:
+        stmt = stmt.where(Contact.stage == stage)
+    if assigned == "me":
+        stmt = stmt.where(Contact.assigned_to == user.id)
+    elif assigned == "none":
+        stmt = stmt.where(Contact.assigned_to.is_(None))
+    elif assigned.isdigit():
+        stmt = stmt.where(Contact.assigned_to == int(assigned))
+    total = _count(db, stmt)
+    per = 30
+    rows = db.scalars(stmt.order_by(func.coalesce(Contact.last_message_at, Contact.last_seen_at).desc(), Contact.id.desc())
+                      .offset((max(page, 1) - 1) * per).limit(per)).all()
+    ids = [c.id for c in rows]
+    msgs = dict(db.execute(select(Message.contact_id, func.count(Message.id)).where(Message.contact_id.in_(ids))
+                           .group_by(Message.contact_id)).all()) if ids else {}
+    tags: set[str] = set()
+    for (tj,) in db.execute(select(Contact.tags_json).where(Contact.account_id == acc.id, Contact.tags_json != "[]")):
+        try:
+            tags.update(json.loads(tj or "[]"))
+        except ValueError:
+            pass
+    return {"items": [{**contact_json(c), "messages": msgs.get(c.id, 0)} for c in rows], "total": total, "per_page": per,
+            "funnel": funnel, "stages": stages, "team": _team_options(db, user), "tags": sorted(tags),
+            "ai_collect_leads": acc.ai_collect_leads, "ai_enabled": acc.ai_enabled}
+
+
+@app.post("/api/contacts")
+def contact_create(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, int(body.get("account_id") or 0))
+    name = str(body.get("name") or "").strip()[:255]
+    phone = str(body.get("phone") or "").strip()[:40]
+    if not name and not phone:
+        err("empty")
+    c = Contact(account_id=acc.id, igsid=f"manual:{secrets.token_hex(8)}", name=name,
+                username=str(body.get("username") or "").strip().lstrip("@")[:120])
+    if phone:
+        c.fields = {"phone": phone}
+    db.add(c)
+    db.commit()
+    stage = body.get("stage") or crm.get_stages(acc)[0]["id"]
+    if crm.stage_by_id(acc, stage):
+        crm.set_stage(db, c, stage, user.name or user.email)
+    if body.get("deal_value"):
+        try:
+            c.deal_value = max(0, min(int(body["deal_value"]), 10**12))
+            db.commit()
+        except (TypeError, ValueError):
+            pass
+    return contact_json(c)
+
+
+@app.get("/api/crm/tasks")
+def crm_tasks(account_id: int, done: int = 0, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    stmt = _tasks_stmt(acc, user).where(Note.done.is_(bool(done)))
+    rows = db.scalars(stmt.order_by(Note.remind_at.desc() if done else Note.remind_at).limit(300)).all()
+    contacts = {c.id: c for c in db.scalars(select(Contact).where(Contact.id.in_({n.contact_id for n in rows})))} if rows else {}
+    out = []
+    for n in rows:
+        c = contacts.get(n.contact_id)
+        out.append({"id": n.id, "text": n.text, "remind_at": iso(n.remind_at), "done": n.done, "author": n.author,
+                    "contact_id": n.contact_id, "contact": (f"@{c.username}" if c and c.username else (c.name if c else "")) or "—",
+                    "phone": c.fields.get("phone", "") if c else ""})
+    return {"items": out}
+
+
+def _owned_note(db: Session, user: User, note_id: int) -> Note:
+    n = db.get(Note, note_id)
+    if not n:
+        err("not_found", 404)
+    _owned_contact(db, user, n.contact_id)
+    return n
+
+
+@app.patch("/api/notes/{note_id}")
+def note_update(note_id: int, body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    n = _owned_note(db, user, note_id)
+    if "done" in body:
+        n.done = bool(body["done"])
+        if n.done:
+            n.reminded = True
+    if "text" in body and n.kind == "note":
+        n.text = str(body["text"] or "")[:4000]
+    db.commit()
+    return {"ok": True, "done": n.done}
+
+
+@app.delete("/api/notes/{note_id}")
+def note_delete(note_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    n = _owned_note(db, user, note_id)
+    if n.kind != "note":
+        err("forbidden", 403)
+    db.delete(n)
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/crm/tags")
+def crm_tags(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    counts: dict[str, int] = {}
+    for (tj,) in db.execute(select(Contact.tags_json).where(Contact.account_id == acc.id, Contact.tags_json != "[]")):
+        try:
+            for tg in set(json.loads(tj or "[]")):
+                counts[tg] = counts.get(tg, 0) + 1
+        except ValueError:
+            pass
+    return {"items": [{"tag": k, "count": v} for k, v in sorted(counts.items(), key=lambda x: (-x[1], x[0]))]}
+
+
+@app.post("/api/crm/tags")
+def crm_tags_edit(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Tegni qayta nomlash ({from, to}) yoki o'chirish ({from}, to bo'sh)."""
+    acc = owned_account(db, user, int(body.get("account_id") or 0))
+    old = str(body.get("from") or "").strip()
+    new = str(body.get("to") or "").strip()[:60]
+    if not old:
+        err("empty")
+    n = 0
+    for c in db.scalars(select(Contact).where(Contact.account_id == acc.id,
+                                              Contact.tags_json.like(f'%{json.dumps(old, ensure_ascii=False)}%'))):
+        if old in c.tags:
+            tags = [t for t in c.tags if t != old]
+            if new and new not in tags:
+                tags.append(new)
+            c.tags = tags
+            n += 1
+    db.commit()
+    return {"changed": n}
+
+
+@app.get("/api/crm/duplicates")
+def crm_duplicates(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    return {"groups": [{"phone": g[0].fields.get("phone", ""), "items": [contact_json(c) for c in g]}
+                       for g in _duplicate_groups(db, acc)]}
+
+
+@app.get("/api/crm/report")
+def crm_report(account_id: int, days: int = 30, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    days = days if days in (7, 30, 90) else 30
+    since = utcnow() - timedelta(days=days)
+    stages = crm.get_stages(acc)
+    won_ids = [s["id"] for s in stages if s["type"] == "won"]
+    lost_ids = [s["id"] for s in stages if s["type"] == "lost"]
+    new = db.scalars(select(Contact).where(Contact.account_id == acc.id, Contact.created_at >= since)).all()
+    won = db.scalars(select(Contact).where(Contact.account_id == acc.id, Contact.stage.in_(won_ids),
+                                           Contact.stage_changed_at >= since)).all()
+    lost = _count(db, select(Contact.id).where(Contact.account_id == acc.id, Contact.stage.in_(lost_ids),
+                                                Contact.stage_changed_at >= since))
+    per_new: dict[str, int] = {}
+    per_won: dict[str, int] = {}
+    for c in new:
+        per_new[c.created_at.date().isoformat()] = per_new.get(c.created_at.date().isoformat(), 0) + 1
+    for c in won:
+        k = c.stage_changed_at.date().isoformat()
+        per_won[k] = per_won.get(k, 0) + 1
+    leads = sum(1 for c in new if "phone" in c.fields or "email" in c.fields)
+    by_stage = []
+    for s in stages:
+        cnt, total = db.execute(select(func.count(Contact.id), func.coalesce(func.sum(Contact.deal_value), 0)).where(
+            Contact.account_id == acc.id, Contact.stage == s["id"])).one()
+        by_stage.append({**s, "count": cnt or 0, "sum": int(total or 0)})
+    owner = user.workspace
+    people = []
+    for m in [owner, *crm.team_members(db, owner.id)]:
+        assigned = _count(db, select(Contact.id).where(Contact.account_id == acc.id, Contact.assigned_to == m.id,
+                                                        Contact.stage.is_not(None)))
+        mw = [c for c in won if c.assigned_to == m.id]
+        people.append({"id": m.id, "name": m.name or m.email, "role": "owner" if m.id == owner.id else ("ai" if m.is_ai else "manager"),
+                       "assigned": assigned, "won": len(mw), "revenue": sum(c.deal_value or 0 for c in mw)})
+    return {"days": days, "new": len(new), "leads": leads, "won": len(won), "lost": lost,
+            "revenue": sum(c.deal_value or 0 for c in won),
+            "conversion": round(len(won) * 100 / len(new)) if new else 0,
+            "series": {"new": [{"date": d, "value": per_new.get(d, 0)} for d in _days(days)],
+                       "won": [{"date": d, "value": per_won.get(d, 0)} for d in _days(days)]},
+            "stages": by_stage, "people": people}
 
 
 @app.get("/api/crm/stages")

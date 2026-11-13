@@ -337,6 +337,7 @@ class Note(Base):
     remind_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     reminded: Mapped[bool] = mapped_column(Boolean, default=False)
+    done: Mapped[bool] = mapped_column(Boolean, default=False)  # vazifa bajarildi
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 

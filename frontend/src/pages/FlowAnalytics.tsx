@@ -79,7 +79,7 @@ export default function FlowAnalytics() {
             : <div className="grid h-[200px] place-items-center rounded-2xl bg-soft text-[14px] text-ink-3">{t('fa.no_data')}</div>}
         </section>
 
-        <Link to={`/app/contacts?flow=${d.flow.id}`} className="inline-flex items-center gap-2 text-[14px] font-semibold text-brand-700 hover:underline">
+        <Link to={`/app/crm?view=list&flow=${d.flow.id}`} className="inline-flex items-center gap-2 text-[14px] font-semibold text-brand-700 hover:underline">
           <Users className="h-4 w-4" />{t('fl.clients')}<ArrowRight className="h-4 w-4" />
         </Link>
       </div>

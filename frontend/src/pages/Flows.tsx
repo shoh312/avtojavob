@@ -51,7 +51,7 @@ function CardMenu({ f, onToggle, onDuplicate, onDelete, onLink }: {
           <div className="my-1 h-px bg-line" />
           {item(Pencil, t('common.edit'), () => nav(`/app/flows/${f.id}`))}
           {item(ChartLine, t('fl.analytics'), () => nav(`/app/flows/${f.id}/analytics`))}
-          {item(Users, t('fl.clients'), () => nav(`/app/contacts?flow=${f.id}`))}
+          {item(Users, t('fl.clients'), () => nav(`/app/crm?view=list&flow=${f.id}`))}
           {item(Link2, t('fl.bot_link'), onLink)}
           <div className="my-1 h-px bg-line" />
           {item(Copy, t('common.duplicate'), onDuplicate)}
