@@ -9,7 +9,7 @@ import { fmtNum } from '../components/charts'
 import { Onboarding } from './Home'
 
 export type Stage = { id: string; name: string; color: string; type: 'open' | 'won' | 'lost' }
-type TeamOpt = { id: number; name: string; role: 'owner' | 'manager' }
+type TeamOpt = { id: number; name: string; role: 'owner' | 'manager' | 'ai' }
 type Card = Contact & { stage: string; deal_value: number; notes: number; last_message_preview: string; assigned_to: number | null; assignee: string | null; next_reminder: string | null }
 type Board = { stages: Stage[]; totals: Record<string, { count: number; sum: number }>; cards: Card[]; team: TeamOpt[] }
 type TItem = { type: 'note' | 'stage' | 'message'; id: string; text: string; author?: string; direction?: string; source?: string; created_at: string; remind_at?: string | null; reminded?: boolean }
@@ -59,7 +59,7 @@ export function ContactPanel({ id, onClose, onChanged }: { id: number; onClose: 
               <label className="block"><span className="label">{t('crm.assignee')}</span>
                 <select className="input" value={c.assigned_to ?? ''} onChange={e => patch({ assigned_to: e.target.value ? Number(e.target.value) : null })}>
                   <option value="">{t('crm.unassigned')}</option>
-                  {d.team.map(m => <option key={m.id} value={m.id}>{m.name}{m.role === 'owner' ? ' ★' : ''}</option>)}
+                  {d.team.map(m => <option key={m.id} value={m.id}>{m.role === 'ai' ? '🤖 ' : ''}{m.name}{m.role === 'owner' ? ' ★' : ''}</option>)}
                 </select></label>
             )}
             <label className="block"><span className="label">{t('crm.value')}</span>
@@ -223,7 +223,7 @@ export default function Crm() {
             <option value="">{t('crm.all_people')}</option>
             <option value="me">{t('crm.mine')}</option>
             <option value="none">{t('crm.unassigned')}</option>
-            {board.team.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            {board.team.map(m => <option key={m.id} value={m.id}>{m.role === 'ai' ? '🤖 ' : ''}{m.name}</option>)}
           </select>
         )}
       </div>
@@ -268,7 +268,9 @@ export default function Crm() {
                       </div>
                     )}
                     <div className="mt-2 flex items-center gap-1.5">
-                      {c.assignee && <span title={c.assignee} className="grid h-5 w-5 place-items-center rounded-full bg-ink text-[10px] font-bold text-white">{c.assignee.charAt(0).toUpperCase()}</span>}
+                      {c.assignee && (board.team.find(m => m.id === c.assigned_to)?.role === 'ai'
+                        ? <span title={c.assignee} className="grid h-5 w-5 place-items-center rounded-full bg-gradient-to-br from-[#6d5dfc] to-[#e5161f] text-[10px] text-white">🤖</span>
+                        : <span title={c.assignee} className="grid h-5 w-5 place-items-center rounded-full bg-ink text-[10px] font-bold text-white">{c.assignee.charAt(0).toUpperCase()}</span>)}
                       {c.tags.slice(0, 2).map(tg => <span key={tg} className="chip bg-brand-50 py-0 text-[11px] text-brand-700">{tg}</span>)}
                       {c.notes > 0 && <span className="flex items-center gap-0.5 text-[11.5px] text-amber-600"><StickyNote className="h-3 w-3" />{c.notes}</span>}
                       <span className="ml-auto text-[11px] text-ink-4 group-hover:hidden">{ago(c.last_message_at || c.last_seen_at)}</span>

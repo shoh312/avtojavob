@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import instagram as ig
-from . import catalog, crm, services, tgbot
+from . import aimanager, catalog, crm, services, tgbot
 from .config import settings
 from .db import get_db, init_db
 from .engine import contact_card as engine_contact_card
@@ -56,6 +56,8 @@ async def _background_loops():
         try:
             await asyncio.to_thread(run_due_jobs)
             await asyncio.to_thread(run_due_reminders)
+            if tick % 10 == 0:  # ~5 daqiqada bir
+                await asyncio.to_thread(aimanager.run_followups)
             if tick % 720 == 0:  # ~6 soatda bir
                 await asyncio.to_thread(refresh_expiring_tokens)
         except Exception:
@@ -246,8 +248,8 @@ def login(request: Request, body: dict = Body(...), db: Session = Depends(get_db
     user = db.scalar(select(User).where(User.email == str(body.get("email") or "").strip().lower()))
     if not user or not verify_password(str(body.get("password") or ""), user.password_hash):
         err("login_failed", 401)
-    if user.is_blocked:
-        err("blocked", 403)
+    if user.is_blocked or user.is_ai:
+        err("blocked" if user.is_blocked else "login_failed", 403 if user.is_blocked else 401)
     user.last_login_at = utcnow()
     db.commit()
     request.session.clear()
@@ -1367,7 +1369,7 @@ async def upload_image(file: UploadFile = File(...), user: User = Depends(curren
 
 def _team_options(db: Session, user: User) -> list[dict]:
     owner = user.workspace
-    return [{"id": u.id, "name": u.name or u.email, "role": "owner" if u.id == owner.id else "manager"}
+    return [{"id": u.id, "name": u.name or u.email, "role": "owner" if u.id == owner.id else ("ai" if u.is_ai else "manager")}
             for u in [owner, *crm.team_members(db, owner.id)]]
 
 
@@ -1383,9 +1385,48 @@ def _member_json(db: Session, owner: User, u: User) -> dict:
             "last_login_at": iso(u.last_login_at), "assigned": assigned, "telegram": links}
 
 
+def _ai_manager_json(db: Session, m: User | None) -> dict | None:
+    if not m:
+        return None
+    return {"id": m.id, "name": m.name, "instructions": m.ai_instructions, "followup_hours": m.ai_followup_hours,
+            "take_all": m.ai_take_all, "assigned": db.scalar(select(func.count(Contact.id)).where(Contact.assigned_to == m.id)) or 0}
+
+
 @app.get("/api/team")
 def team_list(user: User = Depends(owner_user), db: Session = Depends(get_db)):
-    return {"members": [_member_json(db, user, m) for m in crm.team_members(db, user.id)], "auto_assign": user.auto_assign}
+    return {"members": [_member_json(db, user, m) for m in crm.team_members(db, user.id) if not m.is_ai],
+            "auto_assign": user.auto_assign, "ai_manager": _ai_manager_json(db, aimanager.get_ai_manager(db, user.id)),
+            "ai_available": services.ai_available(db)}
+
+
+@app.put("/api/team/ai")
+def team_ai_save(body: dict = Body(...), user: User = Depends(owner_user), db: Session = Depends(get_db)):
+    m = aimanager.get_ai_manager(db, user.id)
+    if not m:
+        m = User(email=f"ai-{user.id}-{secrets.token_hex(4)}@ai.chatflow.local", name="AI Menejer", is_ai=True,
+                 password_hash=hash_password(secrets.token_urlsafe(32)), owner_id=user.id, lang=user.lang, plan="trial")
+        db.add(m)
+    if "name" in body:
+        m.name = str(body["name"] or "").strip()[:120] or "AI Menejer"
+    if "instructions" in body:
+        m.ai_instructions = str(body["instructions"] or "")[:4000]
+    if "followup_hours" in body:
+        m.ai_followup_hours = max(0, min(int(body["followup_hours"] or 0), 20))
+    if "take_all" in body:
+        m.ai_take_all = bool(body["take_all"])
+    db.commit()
+    return _ai_manager_json(db, m)
+
+
+@app.delete("/api/team/ai")
+def team_ai_delete(user: User = Depends(owner_user), db: Session = Depends(get_db)):
+    m = aimanager.get_ai_manager(db, user.id)
+    if m:
+        for c in db.scalars(select(Contact).where(Contact.assigned_to == m.id)):
+            c.assigned_to = None
+        db.delete(m)
+        db.commit()
+    return {"ok": True}
 
 
 @app.post("/api/team")

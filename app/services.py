@@ -236,6 +236,17 @@ def ai_complete(db: Session, system: str, user_text: str, json_mode: bool = Fals
     return fn(db, system, [{"role": "user", "content": user_text}], json_mode=json_mode, max_tokens=max_tokens)
 
 
+def ai_chat_json(db: Session, system: str, history: list[dict]) -> tuple[str | None, str | None]:
+    """Suhbat tarixi bilan JSON javob (AI menejer)."""
+    if not ai_available(db):
+        return None, "not configured"
+    history = _clean_history(history)
+    if not history:
+        return None, "empty history"
+    fn = _gemini if ai_provider(db) == "gemini" else _claude
+    return fn(db, system, history, json_mode=True, max_tokens=2048)
+
+
 def ai_reply(db: Session, business_prompt: str, history: list[dict], leads: str = "off", catalog: str = "") -> str | None:
     return ai_generate(db, business_prompt, history, leads, catalog)[0]
 

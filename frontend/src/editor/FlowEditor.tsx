@@ -4,11 +4,12 @@ import {
   Background, BackgroundVariant, ReactFlow, ReactFlowProvider, useEdgesState, useNodesState, useReactFlow,
   type Connection, type Edge, type FinalConnectionState, type Node, type NodeChange,
 } from '@xyflow/react'
-import { AlertCircle, ArrowLeft, Check, Loader2, Maximize2, Minus, MonitorSmartphone, Plus } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Check, Loader2, Maximize2, Minus, MonitorSmartphone, Play, Plus } from 'lucide-react'
 import { api, type FlowFull, type ValidationError } from '../api'
 import { useI18n, type TKey } from '../i18n'
 import { Spinner, Toggle, useToast } from '../components/ui'
 import Inspector from './Inspector'
+import Simulator from './Simulator'
 import { defaultData, NODE_META, PALETTE, uid, type NodeType } from './meta'
 import { EditorCtx, edgeTypes, nodeTypes } from './nodes'
 
@@ -42,6 +43,8 @@ function Editor({ flow }: { flow: FlowFull }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; source: string; handle: string | null } | null>(null)
   const [showErrors, setShowErrors] = useState(false)
+  const [sim, setSim] = useState<{ start: string | null } | null>(null)
+  const [activeNode, setActiveNode] = useState<string | null>(null)
 
   const snapshot = useMemo(() => serialize(name, nodes, edges), [name, nodes, edges])
   const savedRef = useRef(snapshot)
@@ -179,11 +182,25 @@ function Editor({ flow }: { flow: FlowFull }) {
     rf.setCenter(n.position.x + 136, n.position.y + 80, { zoom: 1, duration: 400 })
   }
 
+  const duplicateNode = useCallback((id: string) => {
+    const src = rf.getNode(id)
+    if (!src) return
+    const nid = uid()
+    const data = JSON.parse(JSON.stringify(src.data || {}))
+    if (Array.isArray(data.buttons)) data.buttons = data.buttons.map((b: any) => ({ ...b, id: uid() }))
+    setNodes(ns => [...ns.map(n => ({ ...n, selected: false })),
+      { id: nid, type: src.type, position: { x: src.position.x + 40, y: src.position.y + 60 }, data, selected: true }])
+    setSelectedId(nid)
+  }, [rf, setNodes])
+
+  const testFrom = useCallback((id: string | null) => { setSelectedId(null); setSim({ start: id }) }, [])
+  const actions = useMemo(() => ({ test: (id: string) => testFrom(id), duplicate: duplicateNode, remove: deleteNode }), [testFrom, duplicateNode, deleteNode])
+
   const selected = nodes.find(n => n.id === selectedId)
   const errCount = errors.length
 
   return (
-    <EditorCtx.Provider value={{ stats, errors: errorsByNode }}>
+    <EditorCtx.Provider value={{ stats, errors: errorsByNode, active: activeNode, actions }}>
       <div className="flex h-screen flex-col bg-soft">
         {/* yuqori panel */}
         <header className="z-20 flex h-14 shrink-0 items-center gap-3 border-b border-line bg-white px-3 sm:px-4">
@@ -214,6 +231,10 @@ function Editor({ flow }: { flow: FlowFull }) {
                 )}
               </div>
             )}
+            <button onClick={() => testFrom(null)}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#6d5dfc] to-[#a855f7] px-3 py-1.5 text-[13px] font-semibold text-white shadow-[0_6px_16px_-8px_rgba(109,93,252,.8)] hover:opacity-95">
+              <Play className="h-3.5 w-3.5" />{t('sim.test')}
+            </button>
             <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-line px-3 py-1.5">
               <span className={`text-[13px] font-semibold ${active ? 'text-brand-700' : 'text-ink-3'}`}>{active ? t('ed.activate') : t('common.draft')}</span>
               <Toggle checked={active} onChange={toggleActive} size="sm" />
@@ -228,7 +249,7 @@ function Editor({ flow }: { flow: FlowFull }) {
               onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onConnectEnd={onConnectEnd}
               isValidConnection={isValidConnection}
               onPaneClick={() => { setSelectedId(null); setMenu(null); setShowErrors(false) }}
-              onNodeClick={(_, n) => setSelectedId(n.id)}
+              onNodeClick={(_, n) => { setSelectedId(n.id); setSim(null) }}
               deleteKeyCode={['Delete', 'Backspace']}
               fitView fitViewOptions={{ padding: 0.35, maxZoom: 1 }} minZoom={0.2} maxZoom={1.75}
               proOptions={{ hideAttribution: true }}
@@ -287,8 +308,16 @@ function Editor({ flow }: { flow: FlowFull }) {
             )}
           </div>
 
+          {/* simulyator */}
+          {sim && (
+            <aside className="absolute inset-y-14 right-0 z-30 w-full border-l border-line bg-white shadow-pop sm:w-[380px] lg:static lg:inset-auto lg:shadow-none">
+              <Simulator nodes={nodes} edges={edges} startId={sim.start} accountId={flow.account_id}
+                onActive={setActiveNode} onClose={() => { setSim(null); setActiveNode(null) }} />
+            </aside>
+          )}
+
           {/* inspektor */}
-          {selected && (
+          {selected && !sim && (
             <aside className="absolute inset-y-14 right-0 z-30 w-full border-l border-line bg-white shadow-pop sm:w-[360px] lg:static lg:inset-auto lg:shadow-none">
               <Inspector key={selected.id}
                 node={{ id: selected.id, type: selected.type as NodeType, data: selected.data as Record<string, any> }}

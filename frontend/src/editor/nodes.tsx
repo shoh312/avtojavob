@@ -1,14 +1,54 @@
-import { createContext, memo, useContext, type ReactNode } from 'react'
+import { createContext, memo, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, Handle, Position, useReactFlow, type EdgeProps, type NodeProps } from '@xyflow/react'
-import { AlertCircle, ExternalLink, MousePointerClick, X } from 'lucide-react'
+import { AlertCircle, Copy, ExternalLink, MoreHorizontal, MousePointerClick, Play, Trash2, X } from 'lucide-react'
 import { useI18n, type TKey } from '../i18n'
 import { NODE_META, TRIGGER_META, type NodeType } from './meta'
 
 export type EditorCtxValue = {
   stats: Record<string, Record<string, number>>
   errors: Record<string, string[]>
+  active?: string | null
+  actions?: { test: (id: string) => void; duplicate: (id: string) => void; remove: (id: string) => void }
 }
 export const EditorCtx = createContext<EditorCtxValue>({ stats: {}, errors: {} })
+
+/** Blok sarlavhasidagi ⋯ menyu: shu yerdan sinash, nusxa, o'chirish. */
+function NodeMenu({ id, type }: { id: string; type: NodeType }) {
+  const { t } = useI18n()
+  const { actions } = useContext(EditorCtx)
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as globalThis.Node)) setOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [open])
+  if (!actions) return null
+  const item = (icon: typeof Play, label: string, fn: () => void, danger = false) => {
+    const Icon = icon
+    return (
+      <button onClick={e => { e.stopPropagation(); setOpen(false); fn() }}
+        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12.5px] font-medium ${danger ? 'text-brand-700 hover:bg-brand-50' : 'hover:bg-soft'}`}>
+        <Icon className="h-3.5 w-3.5" />{label}
+      </button>
+    )
+  }
+  return (
+    <div ref={ref} className="nodrag relative">
+      <button onClick={e => { e.stopPropagation(); setOpen(o => !o) }} className="grid h-6 w-6 place-items-center rounded-md text-ink-4 hover:bg-soft hover:text-ink">
+        <MoreHorizontal className="h-4 w-4" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-7 z-50 w-48 rounded-xl border border-line bg-white p-1 shadow-pop">
+          {item(Play, t(type === 'trigger' ? 'sim.test_flow' : 'sim.test_here'), () => actions.test(id))}
+          {type !== 'trigger' && item(Copy, t('common.duplicate'), () => actions.duplicate(id))}
+          {type !== 'trigger' && item(Trash2, t('ed.delete_block'), () => actions.remove(id), true)}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function Stat({ value, label }: { value?: number; label: string }) {
   if (!value) return null
@@ -30,13 +70,13 @@ function Shell({ id, type, selected, subtitle, stat, children, footer }: {
   id: string; type: NodeType; selected: boolean; subtitle?: string; stat?: ReactNode; children?: ReactNode; footer?: ReactNode
 }) {
   const { t } = useI18n()
-  const { errors } = useContext(EditorCtx)
+  const { errors, active } = useContext(EditorCtx)
   const meta = NODE_META[type]
   const Icon = meta.icon
   const errs = errors[id] || []
   return (
     <div className={`w-[272px] rounded-[18px] border bg-white shadow-node transition
-      ${selected ? 'border-brand-500 ring-4 ring-brand-100' : errs.length ? 'border-brand-300' : 'border-line hover:border-[#dcdce2]'}`}>
+      ${active === id ? 'border-violet-500 ring-4 ring-violet-200 shadow-[0_0_0_8px_rgba(139,92,246,.08)]' : selected ? 'border-brand-500 ring-4 ring-brand-100' : errs.length ? 'border-brand-300' : 'border-line hover:border-[#dcdce2]'}`}>
       {type !== 'trigger' && <Handle type="target" position={Position.Left} />}
       <div className="flex items-center gap-2.5 px-3.5 pb-2 pt-3">
         <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg ${meta.tint}`}><Icon className="h-[15px] w-[15px]" strokeWidth={2.2} /></span>
@@ -45,6 +85,7 @@ function Shell({ id, type, selected, subtitle, stat, children, footer }: {
           {subtitle && <div className="truncate text-[11.5px] leading-tight text-ink-3">{subtitle}</div>}
         </div>
         {stat}
+        <NodeMenu id={id} type={type} />
       </div>
       {children && <div className="px-3.5 pb-2.5">{children}</div>}
       {errs.length > 0 && (

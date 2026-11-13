@@ -35,6 +35,11 @@ class User(Base):
     # Jamoa: menejer bo'lsa — ish maydoni egasining id'si
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     auto_assign: Mapped[bool] = mapped_column(Boolean, default=False)  # yangi lidlarni menejerlarga taqsimlash
+    # AI menejer (virtual jamoa a'zosi)
+    is_ai: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_instructions: Mapped[str] = mapped_column(Text, default="")
+    ai_followup_hours: Mapped[int] = mapped_column(Integer, default=0)
+    ai_take_all: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     owner: Mapped["User | None"] = relationship(remote_side="User.id", foreign_keys=[owner_id])
@@ -151,6 +156,7 @@ class Contact(Base):
     deal_value: Mapped[int] = mapped_column(Integer, default=0)
     stage_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     assigned_to: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    ai_followup_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 

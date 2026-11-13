@@ -23,7 +23,7 @@ from .db import SessionLocal
 from .flows import field_key, trigger_of
 from .models import (SEND_KINDS, Broadcast, Contact, EventLog, Flow, FlowSession, IGAccount, Message, NodeStat,
                      ProcessedEvent, ScheduledJob, utcnow)
-from . import catalog, crm, services, tgbot
+from . import aimanager, catalog, crm, services, tgbot
 from .plans import account_owner_active
 from .security import decrypt, encrypt
 
@@ -607,6 +607,8 @@ def handle_messaging(db: Session, account: IGAccount, event: dict) -> None:
     if not flow:
         # Hech bir ssenariy mos kelmadi: AI yordamchi yoki operatorga xabarnoma
         if kind == "dm" and text and mark_processed(db, f"m:{mid}"):
+            if aimanager.reply(db, account, contact, text):
+                return
             if not (account.ai_enabled and ai_answer(db, account, contact, text)):
                 if account.tg_notify_inbox and account.tg_chat_id and not account.tg_notify_all:
                     notify_telegram(db, account, contact_card(contact, "💬 Direct", f"“{text[:500]}”"), contact)
