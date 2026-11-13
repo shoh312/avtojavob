@@ -627,15 +627,56 @@ def contacts_export(account_id: int, q: str = "", tag: str = "", user: User = De
 
 # ---------------------------------------------------------------- faollik
 
+ACTIVITY_GROUPS = {
+    "replies": ("comment_reply", "private_reply", "dm_reply", "agent_reply", "broadcast"),
+    "actions": ("click", "answer"),
+    "ai": ("ai_reply",),
+    "issues": ("error", "skipped"),
+}
+
+
 @app.get("/api/activity")
-def activity(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def activity(account_id: int, group: str = "", flow: int = 0, q: str = "", before: int = 0,
+             user: User = Depends(current_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
-    rows = db.scalars(select(EventLog).where(EventLog.account_id == acc.id)
-                      .order_by(EventLog.id.desc()).limit(200)).all()
+    stmt = select(EventLog).where(EventLog.account_id == acc.id)
+    if group in ACTIVITY_GROUPS:
+        stmt = stmt.where(EventLog.kind.in_(ACTIVITY_GROUPS[group]))
+    if flow:
+        stmt = stmt.where(EventLog.flow_id == flow)
+    if q.strip():
+        like = f"%{q.strip().lower().lstrip('@')}%"
+        stmt = stmt.where(or_(func.lower(EventLog.username).like(like), func.lower(EventLog.incoming).like(like),
+                              func.lower(EventLog.detail).like(like)))
+    if before:
+        stmt = stmt.where(EventLog.id < before)
+    rows = db.scalars(stmt.order_by(EventLog.id.desc()).limit(51)).all()
+    more, rows = len(rows) > 50, rows[:50]
     names = {f.id: f.name for f in acc.flows}
-    return {"items": [{"id": r.id, "kind": r.kind, "username": r.username, "incoming": r.incoming,
-                       "detail": r.detail, "flow_id": r.flow_id, "flow_name": names.get(r.flow_id or 0, ""),
-                       "created_at": iso(r.created_at)} for r in rows]}
+    out = {"items": [{"id": r.id, "kind": r.kind, "username": r.username, "incoming": r.incoming,
+                      "detail": r.detail, "flow_id": r.flow_id, "flow_name": names.get(r.flow_id or 0, ""),
+                      "contact_id": r.contact_id, "created_at": iso(r.created_at)} for r in rows],
+           "more": more, "flows": [{"id": i, "name": n} for i, n in names.items()]}
+    if not before:
+        now = utcnow()
+        since = now - timedelta(hours=24)
+        recent = db.execute(select(EventLog.kind, EventLog.contact_id, EventLog.created_at).where(
+            EventLog.account_id == acc.id, EventLog.created_at >= since)).all()
+        hours = [0] * 24
+        for kind, _, at in recent:
+            if kind in SEND_KINDS:
+                idx = 23 - int((now - at).total_seconds() // 3600)
+                if 0 <= idx < 24:
+                    hours[idx] += 1
+        out["stats"] = {
+            "sent": sum(1 for k, _, _ in recent if k in SEND_KINDS),
+            "contacts": len({c for _, c, _ in recent if c}),
+            "actions": sum(1 for k, _, _ in recent if k in ("click", "answer")),
+            "ai": sum(1 for k, _, _ in recent if k == "ai_reply"),
+            "errors": sum(1 for k, _, _ in recent if k == "error"),
+            "hours": hours,
+        }
+    return out
 
 
 # ---------------------------------------------------------------- Meta webhook

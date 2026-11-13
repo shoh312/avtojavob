@@ -1026,3 +1026,16 @@ def test_flow_analytics(client):
     contacts = client.get(f"/api/contacts?account_id={acc}&flow={busy['id']}").json()
     assert contacts["total"] == a["started"]
     assert "followers" in client.get("/api/me").json()["accounts"][0]
+
+
+def test_activity_filters(client):
+    acc = S["acc"]
+    r = client.get(f"/api/activity?account_id={acc}").json()
+    assert r["items"] and len(r["stats"]["hours"]) == 24 and r["stats"]["sent"] >= 1
+    errs = client.get(f"/api/activity?account_id={acc}&group=issues").json()["items"]
+    assert all(i["kind"] in ("error", "skipped") for i in errs)
+    last = r["items"][-1]["id"]
+    older = client.get(f"/api/activity?account_id={acc}&before={last}").json()
+    assert "stats" not in older and all(i["id"] < last for i in older["items"])
+    fid = next(i["flow_id"] for i in r["items"] if i["flow_id"])
+    assert all(i["flow_id"] == fid for i in client.get(f"/api/activity?account_id={acc}&flow={fid}").json()["items"])
