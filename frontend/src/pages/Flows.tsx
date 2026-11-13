@@ -38,7 +38,7 @@ function CardMenu({ f, onToggle, onDuplicate, onDelete, onLink }: {
     </button>
   )
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative" onClick={e => e.stopPropagation()}>
       <button onClick={() => setOpen(o => !o)} className={`grid h-8 w-8 place-items-center rounded-lg ${open ? 'bg-soft text-ink' : 'text-ink-4 hover:bg-soft hover:text-ink'}`}>
         <MoreHorizontal className="h-5 w-5" />
       </button>
@@ -67,6 +67,7 @@ export default function Flows() {
   const { t } = useI18n()
   const ago = useTimeAgo()
   const toast = useToast()
+  const nav = useNavigate()
   const { account } = useAuth()
   const [flows, setFlows] = useState<Row[] | null>(null)
   const [modal, setModal] = useState(false)
@@ -147,9 +148,9 @@ export default function Flows() {
             const tm = f.trigger.kind ? TRIGGER_META[f.trigger.kind] : null
             const TIcon = tm?.icon ?? Workflow
             return (
-              <div key={f.id} className="group relative flex min-h-[188px] flex-col rounded-2xl border border-line bg-white p-5 transition hover:border-[#d6d6dc] hover:shadow-card">
+              <div key={f.id} onClick={() => nav(`/app/flows/${f.id}/analytics`)} className="group relative flex min-h-[188px] cursor-pointer flex-col rounded-2xl border border-line bg-white p-5 transition hover:border-[#d6d6dc] hover:shadow-card">
                 <div className="flex items-start gap-3">
-                  <Link to={`/app/flows/${f.id}`} className="flex min-w-0 flex-1 items-center gap-3">
+                  <Link to={`/app/flows/${f.id}/analytics`} className="flex min-w-0 flex-1 items-center gap-3">
                     <IgAvatar account={account} size={46} />
                     <div className="min-w-0">
                       <div className="truncate text-[12.5px] text-ink-3">{account.username}</div>
