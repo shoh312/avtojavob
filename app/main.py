@@ -1160,9 +1160,13 @@ def _integrations_json(db: Session, acc: IGAccount) -> dict:
     return {"ai_enabled": acc.ai_enabled, "ai_prompt": acc.ai_prompt, "ai_available": services.ai_available(db),
             "ai_collect_leads": acc.ai_collect_leads,
             "telegram": {"connected": bool(acc.tg_chat_id), "chat": acc.tg_chat_title,
-                         "two_way": settings.APP_URL.startswith("https://")},
+                         "two_way": settings.APP_URL.startswith("https://"), "bot": acc.tg_bot_username or ""},
             "tg_notify_leads": acc.tg_notify_leads, "tg_notify_inbox": acc.tg_notify_inbox,
-            "tg_notify_all": acc.tg_notify_all}
+            "tg_notify_all": acc.tg_notify_all,
+            "instagram": {"username": acc.username, "active": acc.active, "picture_url": acc.picture_url},
+            "ai_manager": bool(aimanager.get_ai_manager(db, acc.user_id)),
+            "products": db.scalar(select(func.count(Product.id)).where(Product.account_id == acc.id)) or 0,
+            "webhook_flows": [{"id": f.id, "name": f.name} for f in acc.flows if '"webhook"' in (f.graph_json or "")]}
 
 
 @app.get("/api/accounts/{account_id}/integrations")

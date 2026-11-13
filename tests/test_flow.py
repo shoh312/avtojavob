@@ -1120,3 +1120,9 @@ def test_echo_and_history(client):
     assert th[0]["direction"] == "in" and th[1]["direction"] == "out" and th[1]["source"] == "app"
     assert client.post(f"/api/inbox/{cid}/sync", headers=H).json()["added"] == 0
     history.clear()
+
+
+def test_integrations_overview(client):
+    d = client.get(f"/api/accounts/{S['acc']}/integrations").json()
+    assert d["instagram"]["username"] and isinstance(d["webhook_flows"], list) and "bot" in d["telegram"]
+    assert isinstance(d["ai_manager"], bool) and d["products"] >= 0
