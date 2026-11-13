@@ -43,7 +43,7 @@ function Editor({ flow }: { flow: FlowFull }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; source: string; handle: string | null } | null>(null)
   const [showErrors, setShowErrors] = useState(false)
-  const [sim, setSim] = useState<{ start: string | null } | null>(null)
+  const [sim, setSim] = useState<{ start: string | null; key: number } | null>(null)
   const [activeNode, setActiveNode] = useState<string | null>(null)
 
   const snapshot = useMemo(() => serialize(name, nodes, edges), [name, nodes, edges])
@@ -193,7 +193,7 @@ function Editor({ flow }: { flow: FlowFull }) {
     setSelectedId(nid)
   }, [rf, setNodes])
 
-  const testFrom = useCallback((id: string | null) => { setSelectedId(null); setSim({ start: id }) }, [])
+  const testFrom = useCallback((id: string | null) => { setSelectedId(null); setSim({ start: id, key: Date.now() }) }, [])
   const actions = useMemo(() => ({ test: (id: string) => testFrom(id), duplicate: duplicateNode, remove: deleteNode }), [testFrom, duplicateNode, deleteNode])
 
   const selected = nodes.find(n => n.id === selectedId)
@@ -250,7 +250,8 @@ function Editor({ flow }: { flow: FlowFull }) {
               onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onConnectEnd={onConnectEnd}
               isValidConnection={isValidConnection}
               onPaneClick={() => { setSelectedId(null); setMenu(null); setShowErrors(false) }}
-              onNodeClick={(_, n) => { setSelectedId(n.id); setSim(null) }}
+              onNodeClick={(_, n) => { if (sim) testFrom(n.id); else setSelectedId(n.id) }}
+              onNodeDoubleClick={(_, n) => { setSim(null); setActiveNode(null); setSelectedId(n.id) }}
               deleteKeyCode={['Delete', 'Backspace']}
               fitView fitViewOptions={{ padding: 0.35, maxZoom: 1 }} minZoom={0.2} maxZoom={1.75}
               proOptions={{ hideAttribution: true }}
@@ -312,7 +313,7 @@ function Editor({ flow }: { flow: FlowFull }) {
           {/* simulyator */}
           {sim && (
             <aside className="absolute inset-y-14 right-0 z-30 w-full border-l border-line bg-[#f4f4f6] shadow-pop sm:w-[420px] lg:static lg:inset-auto lg:shadow-none">
-              <Simulator nodes={nodes} edges={edges} startId={sim.start} accountId={flow.account_id}
+              <Simulator nodes={nodes} edges={edges} startId={sim.start} startKey={sim.key} accountId={flow.account_id}
                 onActive={setActiveNode} onClose={() => { setSim(null); setActiveNode(null) }} />
             </aside>
           )}

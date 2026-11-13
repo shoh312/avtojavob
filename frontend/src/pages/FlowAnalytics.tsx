@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
+import Simulator from '../editor/Simulator'
 import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft, ArrowRight, Pencil, Users } from 'lucide-react'
-import { api, type FlowSummary } from '../api'
+import { api, type FlowFull, type FlowSummary } from '../api'
 import { useAuth } from '../auth'
 import { useI18n } from '../i18n'
 import { Spinner } from '../components/ui'
 import { AreaChart, type Point } from '../components/charts'
-import { IgAvatar, PhoneFrame, ProfileIntro } from '../components/Phone'
-import { TRIGGER_META } from '../editor/meta'
+import { IgAvatar } from '../components/Phone'
 
 type Data = { flow: FlowSummary; days: number; started: number; converted: number; conversion: number
   series: { started: Point[]; converted: Point[] } }
@@ -18,13 +18,13 @@ export default function FlowAnalytics() {
   const { me } = useAuth()
   const [days, setDays] = useState(30)
   const [d, setD] = useState<Data | null>(null)
+  const [full, setFull] = useState<FlowFull | null>(null)
+  useEffect(() => { api.get<FlowFull>(`/api/flows/${id}`).then(setFull).catch(() => {}) }, [id])
 
   useEffect(() => { api.get<Data>(`/api/flows/${id}/analytics?days=${days}`).then(setD).catch(() => {}) }, [id, days])
   if (!d) return <Spinner />
   const account = me?.accounts.find(a => a.id === d.flow.account_id) ?? null
-  const tm = d.flow.trigger.kind ? TRIGGER_META[d.flow.trigger.kind] : null
   const hasData = d.series.started.some(p => p.value > 0)
-  const kws = d.flow.trigger.keywords.split(',').map(k => k.trim()).filter(Boolean).slice(0, 4)
 
   return (
     <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_400px]">
@@ -85,31 +85,13 @@ export default function FlowAnalytics() {
       </div>
 
       <div className="hidden xl:block">
-        <div className="sticky top-6 flex justify-center">
-          <PhoneFrame account={account} className="h-[720px] w-[360px]"
-            footer={
-              <div className="px-5 pb-3 pt-2">
-                <Link to={`/app/flows/${d.flow.id}`} className="flex h-12 items-center justify-center rounded-2xl bg-[#3f3f46] text-[14.5px] font-semibold text-white hover:bg-ink">{t('fa.open_flow')}</Link>
-              </div>
-            }>
-            <div className="flex flex-1 flex-col">
-              <ProfileIntro account={account} />
-              <div className="flex flex-1 flex-col items-center justify-center px-8 pb-10 text-center">
-                <div className="flex items-center gap-2 text-[15.5px] font-semibold">
-                  <span className={`h-2.5 w-2.5 rounded-full ${d.flow.active ? 'bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,.15)]' : 'bg-ink-4'}`} />
-                  {d.flow.active ? t('fa.running') : t('fa.paused')}
-                </div>
-                {tm && (
-                  <div className="mt-3 text-[13px] leading-relaxed text-ink-3">
-                    {t(tm.label)}
-                    {d.flow.trigger.match === 'any' ? <div>{t('flows.any_text')}</div> : kws.length > 0 && (
-                      <div className="mt-2 flex flex-wrap justify-center gap-1.5">{kws.map(k => <span key={k} className="rounded-full border border-line bg-white px-2.5 py-0.5 text-[12px] text-ink-2">{k}</span>)}</div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </PhoneFrame>
+        <div className="sticky top-6">
+          <div className="mb-3 flex items-center justify-center gap-2 text-[13.5px] font-semibold">
+            <span className={`h-2.5 w-2.5 rounded-full ${d.flow.active ? 'bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,.15)]' : 'bg-ink-4'}`} />
+            {d.flow.active ? t('fa.running') : t('fa.paused')}
+            <span className="font-normal text-ink-4">· {t('sim.sub_short')}</span>
+          </div>
+          {full ? <Simulator embedded nodes={full.graph.nodes} edges={full.graph.edges} startId={null} accountId={full.account_id} /> : <Spinner />}
         </div>
       </div>
     </div>
