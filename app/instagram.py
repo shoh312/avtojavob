@@ -1,5 +1,8 @@
 """Instagram API with Instagram Login — kerakli chaqiruvlar."""
 
+import threading
+from collections import deque
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 import httpx
@@ -15,6 +18,24 @@ SCOPES = ",".join([
 ])
 
 _client = httpx.Client(timeout=20)
+
+# ChatFlow o'zi yuborgan xabarlar ID'lari: webhook "echo" kelganda ularni
+# Instagram ilovasidan qo'lda yozilgan xabarlardan ajratish uchun.
+_sent: deque[str] = deque(maxlen=5000)
+_sent_lock = threading.Lock()
+
+
+def _remember(resp: dict) -> dict:
+    mid = (resp or {}).get("message_id")
+    if mid:
+        with _sent_lock:
+            _sent.append(str(mid))
+    return resp
+
+
+def sent_by_us(mid: str) -> bool:
+    with _sent_lock:
+        return mid in _sent
 
 
 class IGError(Exception):
@@ -141,17 +162,53 @@ def build_message(text: str, buttons: list[dict] | None = None) -> dict:
 
 def private_reply(token: str, comment_id: str, message: dict) -> dict:
     """Izoh yozgan odamga Direct'ga xabar (har bir izohga 1 marta, 7 kun ichida)."""
-    return _json(_client.post(_graph("me/messages"), params={"access_token": token}, json={
+    return _remember(_json(_client.post(_graph("me/messages"), params={"access_token": token}, json={
         "recipient": {"comment_id": comment_id},
         "message": message,
-    }))
+    })))
 
 
 def send_dm(token: str, recipient_id: str, message: dict) -> dict:
-    return _json(_client.post(_graph("me/messages"), params={"access_token": token}, json={
+    return _remember(_json(_client.post(_graph("me/messages"), params={"access_token": token}, json={
         "recipient": {"id": recipient_id},
         "message": message,
-    }))
+    })))
+
+
+def _parse_time(v: str) -> datetime | None:
+    try:
+        return datetime.strptime(v, "%Y-%m-%dT%H:%M:%S%z").astimezone(timezone.utc).replace(tzinfo=None)
+    except (TypeError, ValueError):
+        return None
+
+
+def conversation_history(token: str, igsid: str, limit: int = 40) -> list[dict]:
+    """Mijoz bilan suhbatning oxirgi xabarlari (eskidan yangiga):
+    [{"id", "from_id", "text", "created_at"}]. Instagram faqat oxirgi ~20 ta xabar tafsilotini beradi."""
+    conv = _json(_client.get(_graph("me/conversations"), params={
+        "platform": "instagram", "user_id": igsid, "access_token": token,
+        "fields": f"messages.limit({limit}){{id,created_time,from,message}}",
+    })).get("data") or []
+    if not conv:
+        return []
+    raw = ((conv[0].get("messages") or {}).get("data")) or []
+    if raw and "created_time" not in raw[0]:  # ichki maydonlar qaytmadi — har birini alohida so'raymiz
+        detailed = []
+        for m in raw[:20]:
+            try:
+                detailed.append(_json(_client.get(_graph(m["id"]), params={
+                    "fields": "id,created_time,from,message", "access_token": token})))
+            except IGError:
+                continue
+        raw = detailed
+    out = []
+    for m in raw:
+        at = _parse_time(m.get("created_time") or "")
+        if not at:
+            continue
+        out.append({"id": str(m.get("id") or ""), "from_id": str((m.get("from") or {}).get("id") or ""),
+                    "text": m.get("message") or "", "created_at": at})
+    return sorted(out, key=lambda x: x["created_at"])
 
 
 def get_user_profile(token: str, igsid: str) -> dict:

@@ -31,6 +31,7 @@ LONG_MID = ("aWdfZAG1faXRlbToxOklHTWVzc2FnZAUlEOjE3ODQxNDAwMDAwMDAwMDE6MzQwMjgyM
 H = {"X-ChatFlow": "1"}
 calls: list[tuple] = []
 profile = {"follows": False}
+history: dict[str, list] = {}  # soxta Instagram suhbat tarixi
 S: dict = {}
 
 
@@ -43,6 +44,8 @@ def client():
         "list_media": lambda t, limit=30: [{"id": "M1", "caption": "Yangi kolleksiya"}],
         "get_user_profile": lambda t, igsid: {"username": "mijoz", "is_user_follow_business": profile["follows"]},
         "subscribe_webhooks": lambda t: None,
+        "get_me": lambda t: {"username": "shop", "name": "Shop", "profile_picture_url": "", "followers_count": 382},
+        "conversation_history": lambda t, igsid, limit=40: list(history.get(igsid, [])),
     }
     originals = {k: getattr(ig, k) for k in fakes}
     for k, v in fakes.items():
@@ -1074,3 +1077,46 @@ def test_crm_workspace(client):
 
     rep = client.get(f"/api/crm/report?account_id={acc}&days=7").json()
     assert rep["new"] >= 2 and len(rep["series"]["new"]) == 7 and rep["stages"] and rep["people"]
+
+
+def test_echo_and_history(client):
+    from datetime import datetime as _dt
+    from app import engine
+    from app.models import Message
+    engine.ECHO_WAIT_SECONDS = 0
+    acc = S["acc"]
+
+    def echo(mid, to, text):
+        return {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [
+            {"sender": {"id": IG_ID}, "recipient": {"id": to}, "timestamp": 1,
+             "message": {"mid": mid, "text": text, "is_echo": True}}]}]}
+
+    # egasi Instagram ilovasidan yozdi -> chatda "app" xabari, bot pauzada
+    hook(client, echo("echo-owner-1", "echo-user", "Assalomu alaykum, men egasiman"))
+    hook(client, echo("echo-owner-1", "echo-user", "Assalomu alaykum, men egasiman"))  # takror webhook
+    with SessionLocal() as db:
+        c = db.query(Contact).filter_by(account_id=acc, igsid="echo-user").one()
+        cid = c.id
+        msgs = db.query(Message).filter_by(contact_id=cid).all()
+        assert [(m.direction, m.source, m.text) for m in msgs] == [("out", "app", "Assalomu alaykum, men egasiman")]
+        assert c.bot_paused()
+
+    # ChatFlow o'zi yuborgan xabarning echo'si yozilmaydi
+    ig._remember({"message_id": "echo-bot-1"})
+    hook(client, echo("echo-bot-1", "echo-user", "bot javobi"))
+    with SessionLocal() as db:
+        assert db.query(Message).filter_by(contact_id=cid).count() == 1
+
+    # suhbat tarixi: chat ochilganda Instagram'dan tortiladi, ikki marta qo'shilmaydi
+    history["echo-user"] = [
+        {"id": "h1", "from_id": "echo-user", "text": "Narxi qancha?", "created_at": _dt(2026, 1, 5, 10, 0)},
+        {"id": "h2", "from_id": IG_ID, "text": "199 somoni", "created_at": _dt(2026, 1, 5, 10, 1)},
+    ]
+    with SessionLocal() as db:
+        db.get(Contact, cid).history_synced = False
+        db.commit()
+    th = client.get(f"/api/inbox/{cid}").json()["messages"]
+    assert [m["text"] for m in th] == ["Narxi qancha?", "199 somoni", "Assalomu alaykum, men egasiman"]
+    assert th[0]["direction"] == "in" and th[1]["direction"] == "out" and th[1]["source"] == "app"
+    assert client.post(f"/api/inbox/{cid}/sync", headers=H).json()["added"] == 0
+    history.clear()

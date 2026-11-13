@@ -112,10 +112,16 @@ def touch_inbound(db: Session, contact: Contact) -> None:
     db.commit()
 
 
-def record_message(db: Session, account_id: int, contact: Contact, direction: str, text: str, source: str) -> None:
+def mid_key(mid: str) -> str:
+    return hashlib.sha1(mid.encode()).hexdigest() if mid else ""
+
+
+def record_message(db: Session, account_id: int, contact: Contact, direction: str, text: str, source: str,
+                   mid: str = "") -> None:
     """Jonli chat tarixi."""
     text = (text or "").strip()
-    db.add(Message(account_id=account_id, contact_id=contact.id, direction=direction, source=source, text=text[:2000]))
+    db.add(Message(account_id=account_id, contact_id=contact.id, direction=direction, source=source, text=text[:2000],
+                   ext_id=mid_key(mid)))
     contact.last_message_at = utcnow()
     contact.last_message_preview = text[:250]
     if direction == "in":
@@ -534,11 +540,91 @@ def ensure_profile(db: Session, account: IGAccount, contact: Contact) -> None:
     db.commit()
 
 
+ECHO_WAIT_SECONDS = 2.0
+AGENT_PAUSE_MINUTES = 60
+
+
+def echo_media_label(message: dict) -> str:
+    kinds = [a.get("type") for a in message.get("attachments") or []]
+    if not kinds:
+        return ""
+    return {"image": "[📷]", "video": "[🎬]", "audio": "[🎤]", "file": "[📎]"}.get(kinds[0] or "", "[media]")
+
+
+def handle_echo(db: Session, account: IGAccount, event: dict) -> None:
+    """Biznes akkauntdan yuborilgan xabar. ChatFlow yubormagan bo'lsa — egasi Instagram ilovasidan yozgan."""
+    import time
+    message = event.get("message") or {}
+    mid = message.get("mid") or ""
+    recipient = str((event.get("recipient") or {}).get("id") or "")
+    if not mid or not recipient or recipient == account.ig_user_id:
+        return
+    if ig.sent_by_us(mid):
+        return
+    time.sleep(ECHO_WAIT_SECONDS)  # API javobi webhook'dan keyin kelishi mumkin
+    if ig.sent_by_us(mid) or not mark_processed(db, f"echo:{mid}"):
+        return
+    contact = get_contact(db, account, recipient)
+    if db.scalar(select(Message.id).where(Message.contact_id == contact.id, Message.ext_id == mid_key(mid))):
+        return
+    text = message.get("text") or echo_media_label(message) or "[media]"
+    record_message(db, account.id, contact, "out", text, "app", mid)
+    contact.unread = 0  # egasi javob berdi — o'qilgan
+    until = utcnow() + timedelta(minutes=AGENT_PAUSE_MINUTES)
+    if not contact.bot_paused_until or contact.bot_paused_until < until:
+        contact.bot_paused_until = until  # odam suhbatga kirdi — bot jim turadi
+    db.commit()
+
+
+def sync_history(db: Session, account: IGAccount, contact: Contact) -> int:
+    """Instagram'dagi suhbat tarixini (ikkala tomon) chatga qo'shadi. Qo'shilganlar sonini qaytaradi."""
+    if contact.igsid.startswith("manual:"):
+        return 0
+    try:
+        items = ig.conversation_history(decrypt(account.access_token_enc), contact.igsid)
+    except ig.IGError as e:
+        log.info("history @%s: %s", contact.username, e)
+        return 0
+    finally:
+        contact.history_synced = True
+        db.commit()
+    existing = db.scalars(select(Message).where(Message.contact_id == contact.id)).all()
+    keys = {m.ext_id for m in existing if m.ext_id}
+    added = 0
+    for it in items:
+        k = mid_key(it["id"])
+        if k in keys:
+            continue
+        direction = "in" if it["from_id"] == contact.igsid else "out"
+        text = (it["text"] or "[media]").strip()
+        # ChatFlow allaqachon yozib qo'ygan xabar (mid'siz) — matn va vaqt bo'yicha solishtiramiz
+        twin = next((m for m in existing if not m.ext_id and m.direction == direction and m.text == text[:2000]
+                     and abs((m.created_at - it["created_at"]).total_seconds()) < 600), None)
+        if twin:
+            twin.ext_id = k
+            continue
+        db.add(Message(account_id=account.id, contact_id=contact.id, direction=direction,
+                       source="user" if direction == "in" else "app", text=text[:2000], ext_id=k,
+                       created_at=it["created_at"]))
+        keys.add(k)
+        added += 1
+    if added and items:
+        last = items[-1]
+        if not contact.last_message_at or contact.last_message_at < last["created_at"]:
+            contact.last_message_at = last["created_at"]
+            contact.last_message_preview = (last["text"] or "[media]")[:250]
+    db.commit()
+    return added
+
+
 def handle_messaging(db: Session, account: IGAccount, event: dict) -> None:
+    message = event.get("message") or {}
+    if message.get("is_echo"):
+        handle_echo(db, account, event)
+        return
     sender_id = str((event.get("sender") or {}).get("id") or "")
     if not sender_id or sender_id == account.ig_user_id:
         return
-    message = event.get("message") or {}
     postback = event.get("postback")
     if not postback and (not message or message.get("is_echo") or message.get("is_deleted")):
         return
@@ -562,7 +648,7 @@ def handle_messaging(db: Session, account: IGAccount, event: dict) -> None:
     elif (message.get("reply_to") or {}).get("story"):
         record_message(db, account.id, contact, "in", f"↩ story: {text}", "story")
     else:
-        record_message(db, account.id, contact, "in", text or "[media]", "user")
+        record_message(db, account.id, contact, "in", text or echo_media_label(message) or "[media]", "user", mid)
 
     if account.tg_notify_all and account.tg_chat_id and not postback and not qr:
         who = f"@{contact.username}" if contact.username else (contact.name or contact.igsid)

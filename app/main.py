@@ -29,6 +29,7 @@ from . import aimanager, catalog, crm, services, tgbot
 from .config import settings
 from .db import get_db, init_db
 from .engine import contact_card as engine_contact_card
+from .engine import sync_history as engine_sync_history
 from .engine import (broadcast_audience, log_event, process_payload, record_message, refresh_expiring_tokens,
                      resubscribe_all, run_broadcast, run_due_jobs, run_due_reminders)
 from .flows import (blank_graph, build_template, generate_system, list_templates, normalize_generated, trigger_of,
@@ -1265,13 +1266,23 @@ def inbox_list(account_id: int, q: str = "", user: User = Depends(current_user),
 @app.get("/api/inbox/{contact_id}")
 def inbox_thread(contact_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
     c = _owned_contact(db, user, contact_id)
-    msgs = db.scalars(select(Message).where(Message.contact_id == c.id).order_by(Message.id.desc()).limit(200)).all()
+    if not c.history_synced:
+        engine_sync_history(db, c.account, c)
+    msgs = db.scalars(select(Message).where(Message.contact_id == c.id)
+                      .order_by(Message.created_at.desc(), Message.id.desc()).limit(200)).all()
     if c.unread:
         c.unread = 0
         db.commit()
     return {"contact": _conv_json(c),
             "messages": [{"id": m.id, "direction": m.direction, "source": m.source, "text": m.text,
                           "created_at": iso(m.created_at)} for m in reversed(msgs)]}
+
+
+@app.post("/api/inbox/{contact_id}/sync")
+def inbox_sync(contact_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    c = _owned_contact(db, user, contact_id)
+    added = engine_sync_history(db, c.account, c)
+    return {"added": added, **inbox_thread(contact_id, user, db)}
 
 
 @app.post("/api/inbox/{contact_id}/send")

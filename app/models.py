@@ -158,6 +158,7 @@ class Contact(Base):
     stage_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     assigned_to: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     ai_followup_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    history_synced: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
@@ -304,6 +305,7 @@ class Message(Base):
     # user | comment | button | story | flow | ai | agent | broadcast
     source: Mapped[str] = mapped_column(String(20), default="user")
     text: Mapped[str] = mapped_column(Text, default="")
+    ext_id: Mapped[str] = mapped_column(String(64), default="", index=True)  # Instagram mid xeshi
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 

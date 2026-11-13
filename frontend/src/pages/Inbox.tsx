@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Bot, BotOff, Clock, Inbox as InboxIcon, Search, Send } from 'lucide-react'
+import { ArrowLeft, Bot, BotOff, Clock, Inbox as InboxIcon, RefreshCw, Search, Send, Smartphone } from 'lucide-react'
 import { api, ApiError, type Contact } from '../api'
 import { useAuth } from '../auth'
 import { useI18n, useTimeAgo, type TKey } from '../i18n'
@@ -18,6 +18,7 @@ function Thread({ id, onBack, onChanged }: { id: number; onBack: () => void; onC
   const [data, setData] = useState<{ contact: Conv; messages: Msg[] } | null>(null)
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const bottom = useRef<HTMLDivElement>(null)
   const lastId = useRef(0)
 
@@ -47,6 +48,14 @@ function Thread({ id, onBack, onChanged }: { id: number; onBack: () => void; onC
       setBusy(false)
     }
   }
+  const sync = async () => {
+    setSyncing(true)
+    try {
+      const r = await api.post<{ added: number; contact: Conv; messages: Msg[] }>(`/api/inbox/${id}/sync`)
+      setData(r)
+      toast(r.added ? t('inbox.synced', { n: r.added }) : t('inbox.synced_none'))
+    } catch { toast(t('common.error'), 'error') } finally { setSyncing(false) }
+  }
   const pause = async (minutes: number) => {
     const conv = await api.post<Conv>(`/api/inbox/${id}/pause`, { minutes })
     setData(d => d && { ...d, contact: conv })
@@ -62,6 +71,9 @@ function Thread({ id, onBack, onChanged }: { id: number; onBack: () => void; onC
           <div className="truncate text-[14.5px] font-semibold">{c.username ? `@${c.username}` : c.name || c.igsid}</div>
           <div className="flex flex-wrap gap-1">{c.tags.slice(0, 4).map(tg => <span key={tg} className="chip bg-brand-50 py-0 text-[11px] text-brand-700">{tg}</span>)}</div>
         </div>
+        <button onClick={sync} disabled={syncing} title={t('inbox.sync')} className="rounded-xl p-1.5 text-ink-3 hover:bg-soft hover:text-ink disabled:opacity-50">
+          <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+        </button>
         {c.bot_paused ? (
           <button onClick={() => pause(0)} className="inline-flex items-center gap-1.5 rounded-xl bg-amber-50 px-3 py-1.5 text-[12.5px] font-semibold text-amber-800 hover:bg-amber-100">
             <BotOff className="h-4 w-4" /><span className="hidden sm:inline">{t('inbox.resume')}</span>
@@ -80,11 +92,12 @@ function Thread({ id, onBack, onChanged }: { id: number; onBack: () => void; onC
         {data.messages.map(m => (
           <div key={m.id} className={`flex ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[78%] rounded-2xl px-3.5 py-2 text-[14px] leading-snug shadow-card ${m.direction === 'out'
-              ? m.source === 'agent' ? 'rounded-br-md bg-ink text-white' : 'rounded-br-md bg-brand-600 text-white'
+              ? m.source === 'agent' || m.source === 'app' ? 'rounded-br-md bg-ink text-white' : 'rounded-br-md bg-brand-600 text-white'
               : 'rounded-bl-md bg-white text-ink'}`}>
               <div className="whitespace-pre-wrap break-words">{m.text}</div>
               <div className={`mt-1 flex items-center justify-end gap-1.5 text-[10.5px] ${m.direction === 'out' ? 'text-white/60' : 'text-ink-4'}`}>
-                {m.direction === 'out' && m.source !== 'user' && <span>{t(`inbox.src.${m.source}` as TKey)}</span>}
+                {m.direction === 'out' && m.source === 'app' && <span className="inline-flex items-center gap-0.5"><Smartphone className="h-2.5 w-2.5" />{t('inbox.src.app')}</span>}
+                {m.direction === 'out' && m.source !== 'user' && m.source !== 'app' && <span>{t(`inbox.src.${m.source}` as TKey)}</span>}
                 {m.direction === 'in' && m.source === 'comment' && <span>{t('inbox.src.comment')}</span>}
                 <span>{time(m.created_at)}</span>
               </div>

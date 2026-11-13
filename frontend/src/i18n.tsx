@@ -151,6 +151,10 @@ const en = {
   // sozlamalar
   'set.title': 'Settings', 'set.profile': 'Profile', 'set.language': 'Language', 'set.password': 'Change password',
   'set.current_pw': 'Current password', 'set.new_pw': 'New password', 'set.saved': 'Settings saved',
+  "inbox.src.app": "you · Instagram",
+  "inbox.sync": "Load history from Instagram",
+  "inbox.synced": "{n} messages loaded from Instagram",
+  "inbox.synced_none": "Chat is up to date",
   "crm2.v.board": "Board",
   "crm2.v.list": "List",
   "crm2.v.tasks": "Tasks",
@@ -773,6 +777,10 @@ const ru: Dict = {
 
   'set.title': 'Настройки', 'set.profile': 'Профиль', 'set.language': 'Язык', 'set.password': 'Сменить пароль',
   'set.current_pw': 'Текущий пароль', 'set.new_pw': 'Новый пароль', 'set.saved': 'Настройки сохранены',
+  "inbox.src.app": "вы · Instagram",
+  "inbox.sync": "Загрузить историю из Instagram",
+  "inbox.synced": "Загружено {n} сообщений из Instagram",
+  "inbox.synced_none": "Чат актуален",
   "crm2.v.board": "Доска",
   "crm2.v.list": "Список",
   "crm2.v.tasks": "Задачи",
@@ -1393,6 +1401,10 @@ const uz: Dict = {
 
   'set.title': 'Sozlamalar', 'set.profile': 'Profil', 'set.language': 'Til', 'set.password': "Parolni o'zgartirish",
   'set.current_pw': 'Joriy parol', 'set.new_pw': 'Yangi parol', 'set.saved': 'Sozlamalar saqlandi',
+  "inbox.src.app": "siz · Instagram",
+  "inbox.sync": "Instagram'dan tarixni yuklash",
+  "inbox.synced": "Instagram'dan {n} ta xabar yuklandi",
+  "inbox.synced_none": "Chat yangilangan",
   "crm2.v.board": "Doska",
   "crm2.v.list": "Ro'yxat",
   "crm2.v.tasks": "Vazifalar",
@@ -2013,6 +2025,10 @@ const tj: Dict = {
 
   'set.title': 'Танзимот', 'set.profile': 'Профил', 'set.language': 'Забон', 'set.password': 'Иваз кардани парол',
   'set.current_pw': 'Пароли ҷорӣ', 'set.new_pw': 'Пароли нав', 'set.saved': 'Танзимот нигоҳ дошта шуд',
+  "inbox.src.app": "шумо · Instagram",
+  "inbox.sync": "Боркунии таърих аз Instagram",
+  "inbox.synced": "Аз Instagram {n} паём бор шуд",
+  "inbox.synced_none": "Чат навсозӣ шуд",
   "crm2.v.board": "Тахта",
   "crm2.v.list": "Рӯйхат",
   "crm2.v.tasks": "Вазифаҳо",
