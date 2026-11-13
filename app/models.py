@@ -69,6 +69,7 @@ class IGAccount(Base):
     username: Mapped[str] = mapped_column(String(120), default="")
     name: Mapped[str] = mapped_column(String(255), default="")
     picture_url: Mapped[str] = mapped_column(Text, default="")
+    followers: Mapped[int] = mapped_column(Integer, default=0)
     access_token_enc: Mapped[str] = mapped_column(Text)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)

@@ -12,6 +12,7 @@ import AuthPage from './pages/Auth'
 import Home from './pages/Home'
 import Flows from './pages/Flows'
 import Contacts from './pages/Contacts'
+import FlowAnalytics from './pages/FlowAnalytics'
 import Activity from './pages/Activity'
 import Accounts from './pages/Accounts'
 import Settings from './pages/Settings'
@@ -64,6 +65,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/app" element={<Protected><AppLayout /></Protected>}>
                 <Route index element={<Home />} />
                 <Route path="flows" element={<Flows />} />
+                <Route path="flows/:id/analytics" element={<FlowAnalytics />} />
                 <Route path="contacts" element={<Contacts />} />
                 <Route path="activity" element={<Activity />} />
                 <Route path="accounts" element={<Accounts />} />

@@ -231,9 +231,10 @@ function Editor({ flow }: { flow: FlowFull }) {
                 )}
               </div>
             )}
-            <button onClick={() => testFrom(null)}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#6d5dfc] to-[#a855f7] px-3 py-1.5 text-[13px] font-semibold text-white shadow-[0_6px_16px_-8px_rgba(109,93,252,.8)] hover:opacity-95">
-              <Play className="h-3.5 w-3.5" />{t('sim.test')}
+            <button onClick={() => (sim ? (setSim(null), setActiveNode(null)) : testFrom(null))}
+              className={`group inline-flex h-9 items-center gap-2 rounded-xl border pl-1.5 pr-3.5 text-[13px] font-semibold transition ${sim ? 'border-ink bg-ink text-white' : 'border-line bg-white text-ink hover:border-[#d0d0d6] hover:bg-soft'}`}>
+              <span className={`grid h-6 w-6 place-items-center rounded-lg ${sim ? 'bg-white/15' : 'bg-ink text-white'}`}><Play className="h-3 w-3 fill-current" /></span>
+              {t('sim.test')}
             </button>
             <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-line px-3 py-1.5">
               <span className={`text-[13px] font-semibold ${active ? 'text-brand-700' : 'text-ink-3'}`}>{active ? t('ed.activate') : t('common.draft')}</span>
@@ -310,7 +311,7 @@ function Editor({ flow }: { flow: FlowFull }) {
 
           {/* simulyator */}
           {sim && (
-            <aside className="absolute inset-y-14 right-0 z-30 w-full border-l border-line bg-white shadow-pop sm:w-[380px] lg:static lg:inset-auto lg:shadow-none">
+            <aside className="absolute inset-y-14 right-0 z-30 w-full border-l border-line bg-[#f4f4f6] shadow-pop sm:w-[420px] lg:static lg:inset-auto lg:shadow-none">
               <Simulator nodes={nodes} edges={edges} startId={sim.start} accountId={flow.account_id}
                 onActive={setActiveNode} onClose={() => { setSim(null); setActiveNode(null) }} />
             </aside>

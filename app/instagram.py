@@ -90,7 +90,7 @@ def refresh_token(token: str) -> tuple[str, int]:
 
 def get_me(token: str) -> dict:
     return _json(_client.get(_graph("me"), params={
-        "fields": "id,user_id,username,name,profile_picture_url",
+        "fields": "id,user_id,username,name,profile_picture_url,followers_count",
         "access_token": token,
     }))
 

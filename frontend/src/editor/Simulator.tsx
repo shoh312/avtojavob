@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import type { Edge, Node } from '@xyflow/react'
-import { Bell, Clock, ExternalLink, FlaskConical, GitBranch, KanbanSquare, MousePointerClick, RotateCcw, Save, Send, Square, Tag, Webhook, X, Zap } from 'lucide-react'
+import { Bell, Clock, ExternalLink, GitBranch, KanbanSquare, MousePointerClick, RotateCcw, Save, Send, Square, Sticker, Tag, Webhook, X, Zap } from 'lucide-react'
 import { api } from '../api'
 import { useI18n, type TKey } from '../i18n'
-import { Toggle } from '../components/ui'
+import { Avatar, Toggle } from '../components/ui'
+import { PhoneFrame, ProfileIntro } from '../components/Phone'
+import { useAuth } from '../auth'
 
 type Btn = { id: string; title: string; kind: 'flow' | 'url'; url?: string }
 type Entry = { id: number; from: 'user' | 'bot' | 'sys'; text: string; buttons?: Btn[]; nodeId?: string; icon?: typeof Zap; tone?: 'ok' | 'warn' | 'end' }
@@ -34,6 +36,8 @@ export default function Simulator({ nodes, edges, startId, accountId, onActive, 
   onActive: (id: string | null) => void; onClose: () => void
 }) {
   const { t } = useI18n()
+  const { me } = useAuth()
+  const account = me?.accounts.find(a => a.id === accountId) ?? null
   const [entries, setEntries] = useState<Entry[]>([])
   const [waiting, setWaiting] = useState<Waiting>(null)
   const [contact, setContact] = useState<SimContact>({ tags: [], fields: {}, stage: null })
@@ -156,86 +160,96 @@ export default function Simulator({ nodes, edges, startId, accountId, onActive, 
   const placeholder = waiting?.kind === 'question' ? t('sim.answer_ph') : td.kind === 'comment' && !started ? t('sim.comment_ph') : t('sim.msg_ph')
   const keywords = String(td.keywords || '').split(',').map((k: string) => k.trim()).filter(Boolean).slice(0, 4)
 
+  const botAvatar = <Avatar name={account?.username || 'IG'} src={account?.picture_url} size={24} />
+
   return (
-    <div className="flex h-full flex-col bg-white">
-      <div className="flex items-center gap-3 border-b border-line px-4 py-3">
-        <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-[#f58529] via-[#dd2a7b] to-[#8134af] text-white"><FlaskConical className="h-4 w-4" /></span>
+    <div className="flex h-full flex-col bg-[#f4f4f6]">
+      <div className="flex items-center gap-2 px-4 pb-1 pt-3">
         <div className="flex-1">
-          <div className="text-[14.5px] font-bold">{t('sim.title')}</div>
+          <div className="text-[14px] font-bold">{t('sim.title')}</div>
           <div className="text-[11.5px] text-ink-3">{t('sim.sub')}</div>
         </div>
-        <button onClick={reset} title={t('sim.reset')} className="rounded-lg p-1.5 text-ink-3 hover:bg-soft"><RotateCcw className="h-4 w-4" /></button>
-        <button onClick={onClose} className="rounded-lg p-1.5 text-ink-3 hover:bg-soft"><X className="h-4 w-4" /></button>
+        <button onClick={reset} title={t('sim.reset')} className="grid h-8 w-8 place-items-center rounded-lg text-ink-3 hover:bg-white hover:text-ink"><RotateCcw className="h-4 w-4" /></button>
+        <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-ink-3 hover:bg-white hover:text-ink"><X className="h-4 w-4" /></button>
       </div>
-      <div className="flex items-center justify-between gap-2 border-b border-line bg-soft/60 px-4 py-2 text-[12.5px]">
-        <span className="text-ink-3">{t('sim.follows')}</span>
+      <label className="mx-4 mt-2 flex cursor-pointer items-center justify-between gap-2 rounded-xl bg-white px-3 py-2 text-[12.5px] shadow-sm">
+        <span className="text-ink-2">{t('sim.follows')}</span>
         <Toggle size="sm" checked={follows} onChange={setFollows} />
-      </div>
+      </label>
 
-      {/* Instagram chat ko'rinishi */}
-      <div className="scrollbar-thin flex-1 space-y-2.5 overflow-y-auto bg-white px-3 py-4">
-        <div className="flex flex-col items-center pb-2 text-center">
-          <div className="grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-[#f58529] via-[#dd2a7b] to-[#8134af] p-[2px]">
-            <div className="grid h-full w-full place-items-center rounded-full bg-white text-[18px] font-bold text-ink">M</div>
-          </div>
-          <div className="mt-1.5 text-[13px] font-semibold">@mijoz</div>
-          {!started && trigger && (
-            <div className="mt-3 w-full rounded-2xl border border-dashed border-line px-3 py-2.5 text-left text-[12px] text-ink-3">
-              <div className="font-semibold text-ink-2">{t(`trig.${td.kind || 'dm'}` as TKey)}</div>
-              {td.kind === 'story_mention' ? (
-                <button onClick={() => runFrom(next(trigger.id), contact, [{ id: ++seq.current, from: 'user', text: '@ story' }])}
-                  className="mt-2 rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white">{t('sim.mention')}</button>
-              ) : td.match === 'any' ? <div>{t('flows.any_text')}</div> : (
-                <div className="mt-1.5 flex flex-wrap gap-1">{keywords.map(k => (
-                  <button key={k} onClick={() => setText(k)} className="chip bg-soft font-mono text-[11px] hover:bg-brand-50">{k}</button>
-                ))}</div>
-              )}
-            </div>
-          )}
-        </div>
-        {entries.map(e => e.from === 'sys' ? (
-          <div key={e.id} className="flex justify-center animate-fade-up">
-            <span className={`inline-flex max-w-[90%] items-center gap-1.5 rounded-full px-2.5 py-1 text-[11.5px] font-medium ${e.tone === 'ok' ? 'bg-emerald-50 text-emerald-700' : e.tone === 'warn' ? 'bg-amber-50 text-amber-800' : e.tone === 'end' ? 'bg-soft text-ink-4' : 'bg-soft text-ink-2'}`}>
-              {e.icon && <e.icon className="h-3 w-3 shrink-0" />}<span className="truncate">{e.text}</span>
-            </span>
-          </div>
-        ) : (
-          <div key={e.id} className={`flex animate-fade-up ${e.from === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className="max-w-[82%]">
-              <div className={`whitespace-pre-wrap break-words px-3.5 py-2 text-[13.5px] leading-snug ${e.from === 'user'
-                ? 'rounded-[20px] rounded-br-md bg-gradient-to-br from-[#6d5dfc] to-[#a855f7] text-white'
-                : 'rounded-[20px] rounded-bl-md bg-[#efeff3] text-ink'} ${e.buttons?.length ? 'rounded-b-none' : ''}`}>{e.text}</div>
-              {!!e.buttons?.length && (
-                <div className="overflow-hidden rounded-b-[16px] border border-t-0 border-[#e6e6ea]">
-                  {e.buttons.map(b => {
-                    const live = b.kind === 'url' || (waiting?.kind === 'buttons' && waiting.nodeId === e.nodeId)
-                    return (
-                      <button key={b.id} onClick={() => tap(e, b)} disabled={!live}
-                        className="flex w-full items-center justify-center gap-1.5 border-t border-[#e6e6ea] bg-white py-2 text-[13px] font-semibold text-sky-700 first:border-t-0 hover:bg-sky-50 disabled:text-ink-4 disabled:hover:bg-white">
-                        {b.kind === 'url' && <ExternalLink className="h-3 w-3" />}{b.title || '…'}
-                      </button>
-                    )
-                  })}
+      <div className="flex min-h-0 flex-1 justify-center px-4 py-4">
+        <PhoneFrame account={account} className="h-full max-h-[760px] w-full max-w-[360px]"
+          footer={
+            <form onSubmit={send} className="flex items-center gap-2 px-3 pb-1 pt-2">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#c7c7cf] to-[#9d9da8] text-[12px] font-bold text-white">M</span>
+              <div className="flex h-9 flex-1 items-center rounded-full bg-[#f0f0f3] pl-3.5 pr-1.5">
+                <input className="min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-ink-4" value={text} placeholder={placeholder} onChange={e => setText(e.target.value)} />
+                {text.trim()
+                  ? <button className="flex items-center gap-1 px-2 text-[13.5px] font-semibold text-[#3797f0]"><Send className="h-3.5 w-3.5" />{t('sim.send')}</button>
+                  : <Sticker className="mx-1 h-5 w-5 text-ink-2" strokeWidth={1.8} />}
+              </div>
+            </form>
+          }>
+          <div className="scrollbar-thin flex-1 space-y-1.5 overflow-y-auto px-3 pb-3">
+            <ProfileIntro account={account} />
+            {!started && trigger && (
+              <div className="mx-auto mb-3 w-[92%] rounded-2xl bg-[#f4f4f6] px-3.5 py-3 text-center text-[12px] text-ink-3">
+                <div className="font-semibold text-ink-2">{t(`trig.${td.kind || 'dm'}` as TKey)}</div>
+                {td.kind === 'story_mention' ? (
+                  <button onClick={() => runFrom(next(trigger.id), contact, [{ id: ++seq.current, from: 'user', text: '@ story' }])}
+                    className="mt-2 rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white">{t('sim.mention')}</button>
+                ) : td.match === 'any' ? <div className="mt-0.5">{t('flows.any_text')}</div> : (
+                  <div className="mt-2 flex flex-wrap justify-center gap-1.5">{keywords.map(k => (
+                    <button key={k} onClick={() => setText(k)} className="rounded-full border border-[#e3e3e8] bg-white px-2.5 py-1 text-[12px] font-medium text-ink-2 hover:border-ink-4">{k}</button>
+                  ))}</div>
+                )}
+              </div>
+            )}
+            {entries.map((e, i) => {
+              if (e.from === 'sys') return (
+                <div key={e.id} className="flex justify-center py-0.5 animate-fade-up">
+                  <span className={`inline-flex max-w-[92%] items-center gap-1.5 rounded-full px-2.5 py-[3px] text-[11px] font-medium ${e.tone === 'ok' ? 'bg-emerald-50 text-emerald-700' : e.tone === 'warn' ? 'bg-amber-50 text-amber-800' : e.tone === 'end' ? 'text-ink-4' : 'bg-[#f2f2f5] text-ink-3'}`}>
+                    {e.icon && <e.icon className="h-3 w-3 shrink-0" />}<span className="truncate">{e.text}</span>
+                  </span>
                 </div>
-              )}
-            </div>
+              )
+              const nextBot = entries[i + 1]?.from === 'bot'
+              return (
+                <div key={e.id} className={`flex items-end gap-2 animate-fade-up ${e.from === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  {e.from === 'bot' && <span className="w-6 shrink-0">{!nextBot && botAvatar}</span>}
+                  <div className="max-w-[76%]">
+                    <div className={`whitespace-pre-wrap break-words px-3.5 py-2 text-[13.5px] leading-snug ${e.from === 'user'
+                      ? 'rounded-[20px] bg-gradient-to-br from-[#7b4dff] to-[#3c6cff] text-white'
+                      : 'rounded-[20px] bg-[#efeff2] text-ink'} ${e.buttons?.length ? '!rounded-b-[6px]' : ''}`}>{e.text}</div>
+                    {!!e.buttons?.length && (
+                      <div className="mt-[3px] space-y-[3px]">
+                        {e.buttons.map((b, bi) => {
+                          const live = b.kind === 'url' || (waiting?.kind === 'buttons' && waiting.nodeId === e.nodeId)
+                          return (
+                            <button key={b.id} onClick={() => tap(e, b)} disabled={!live}
+                              className={`flex w-full items-center justify-center gap-1.5 bg-[#efeff2] px-3 py-2 text-[13px] font-semibold text-ink hover:bg-[#e4e4ea] disabled:text-ink-4 disabled:hover:bg-[#efeff2] ${bi === e.buttons!.length - 1 ? 'rounded-b-[20px] rounded-t-[6px]' : 'rounded-[6px]'}`}>
+                              {b.kind === 'url' && <ExternalLink className="h-3 w-3" />}{b.title || '…'}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+            <div ref={bottom} />
           </div>
-        ))}
-        <div ref={bottom} />
+        </PhoneFrame>
       </div>
 
       {(contact.tags.length > 0 || Object.keys(contact.fields).length > 0 || contact.stage) && (
-        <div className="flex flex-wrap gap-1 border-t border-line bg-soft/60 px-3 py-2">
+        <div className="flex flex-wrap gap-1 px-4 pb-3">
           {contact.stage && <span className="chip bg-sky-50 text-sky-700">CRM: {stages.find(s => s.id === contact.stage)?.name || contact.stage}</span>}
           {contact.tags.map(tg => <span key={tg} className="chip bg-brand-50 text-brand-700">{tg}</span>)}
-          {Object.entries(contact.fields).map(([k, v]) => <span key={k} className="chip font-mono text-[11px]">{k}: {v}</span>)}
+          {Object.entries(contact.fields).map(([k, v]) => <span key={k} className="chip bg-white font-mono text-[11px]">{k}: {v}</span>)}
         </div>
       )}
-
-      <form onSubmit={send} className="flex items-center gap-2 border-t border-line p-3">
-        <input className="input h-10 flex-1 rounded-full" value={text} placeholder={placeholder} onChange={e => setText(e.target.value)} />
-        <button disabled={!text.trim()} className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40"><Send className="h-4 w-4" /></button>
-      </form>
     </div>
   )
 }

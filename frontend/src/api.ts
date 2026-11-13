@@ -39,7 +39,7 @@ export type AdminOverview = {
   ig_accounts: number; flows_active: number; contacts: number; sent_24h: number; currency: string
   series: { signups: SeriesPoint[]; sent: SeriesPoint[]; revenue: SeriesPoint[] }
 }
-export type Account = { id: number; username: string; name: string; picture_url: string; active: boolean; token_expires_at: string | null }
+export type Account = { id: number; username: string; name: string; picture_url: string; followers?: number; active: boolean; token_expires_at: string | null }
 export type TriggerKind = 'comment' | 'dm' | 'story_reply' | 'story_mention'
 export type FlowSummary = {
   id: number; account_id: number; name: string; active: boolean; runs: number; nodes: number

@@ -184,7 +184,7 @@ def user_json(u: User) -> dict:
 
 def account_json(a: IGAccount) -> dict:
     return {"id": a.id, "username": a.username, "name": a.name, "picture_url": a.picture_url,
-            "active": a.active, "token_expires_at": iso(a.token_expires_at)}
+            "followers": a.followers or 0, "active": a.active, "token_expires_at": iso(a.token_expires_at)}
 
 
 def flow_summary(f: Flow) -> dict:
@@ -341,6 +341,7 @@ def instagram_callback(request: Request, code: str | None = None, state: str | N
     acc.username = me_.get("username") or ""
     acc.name = me_.get("name") or ""
     acc.picture_url = me_.get("profile_picture_url") or ""
+    acc.followers = int(me_.get("followers_count") or 0)
     acc.access_token_enc = encrypt(token)
     acc.token_expires_at = utcnow() + timedelta(seconds=expires_in or 60 * 86400)
     acc.active = True
@@ -406,7 +407,48 @@ def templates_list(user: User = Depends(current_user)):
 @app.get("/api/flows")
 def flows_list(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
-    return {"items": [flow_summary(f) for f in sorted(acc.flows, key=lambda f: f.id, reverse=True)]}
+    ids = [f.id for f in acc.flows]
+    users, conv, last = {}, {}, {}
+    if ids:
+        users = dict(db.execute(select(EventLog.flow_id, func.count(func.distinct(EventLog.contact_id))).where(
+            EventLog.flow_id.in_(ids)).group_by(EventLog.flow_id)).all())
+        conv = dict(db.execute(select(EventLog.flow_id, func.count(func.distinct(EventLog.contact_id))).where(
+            EventLog.flow_id.in_(ids), EventLog.kind.in_(CONVERT_KINDS)).group_by(EventLog.flow_id)).all())
+        last = dict(db.execute(select(EventLog.flow_id, func.max(EventLog.created_at)).where(
+            EventLog.flow_id.in_(ids)).group_by(EventLog.flow_id)).all())
+    items = []
+    for f in sorted(acc.flows, key=lambda f: f.id, reverse=True):
+        u = users.get(f.id, 0)
+        items.append({**flow_summary(f), "users": u, "converted": conv.get(f.id, 0),
+                      "conversion": round(conv.get(f.id, 0) * 100 / u) if u else 0, "last_run": iso(last.get(f.id))})
+    return {"items": items}
+
+
+# Konversiya: mijoz ssenariyda harakat qildi (tugma bosdi yoki savolga javob berdi)
+CONVERT_KINDS = ("click", "answer")
+
+
+@app.get("/api/flows/{flow_id}/analytics")
+def flow_analytics(flow_id: int, days: int = 30, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    flow = owned_flow(db, user, flow_id)
+    days = days if days in (7, 30, 90) else 30
+    since = utcnow() - timedelta(days=days)
+    rows = db.execute(select(EventLog.contact_id, EventLog.kind, EventLog.created_at).where(
+        EventLog.flow_id == flow.id, EventLog.created_at >= since, EventLog.contact_id.is_not(None))).all()
+    started, converted = set(), set()
+    day_started: dict[str, set] = {}
+    day_conv: dict[str, set] = {}
+    for cid, kind, at in rows:
+        day = at.date().isoformat()
+        started.add(cid)
+        day_started.setdefault(day, set()).add(cid)
+        if kind in CONVERT_KINDS:
+            converted.add(cid)
+            day_conv.setdefault(day, set()).add(cid)
+    return {"flow": flow_summary(flow), "days": days, "started": len(started), "converted": len(converted),
+            "conversion": round(len(converted) * 100 / len(started)) if started else 0,
+            "series": {"started": [{"date": d, "value": len(day_started.get(d, ()))} for d in _days(days)],
+                       "converted": [{"date": d, "value": len(day_conv.get(d, ()))} for d in _days(days)]}}
 
 
 def _sync_trigger(flow: Flow) -> None:
@@ -497,8 +539,10 @@ def flow_stats(flow_id: int, user: User = Depends(current_user), db: Session = D
 
 # ---------------------------------------------------------------- kontaktlar
 
-def _contacts_query(db: Session, acc: IGAccount, q: str, tag: str):
+def _contacts_query(db: Session, acc: IGAccount, q: str, tag: str, flow_id: int = 0):
     stmt = select(Contact).where(Contact.account_id == acc.id)
+    if flow_id:
+        stmt = stmt.where(Contact.id.in_(select(EventLog.contact_id).where(EventLog.flow_id == flow_id)))
     if q:
         like = f"%{q.lower()}%"
         stmt = stmt.where(or_(func.lower(Contact.username).like(like), func.lower(Contact.name).like(like),
@@ -509,10 +553,10 @@ def _contacts_query(db: Session, acc: IGAccount, q: str, tag: str):
 
 
 @app.get("/api/contacts")
-def contacts_list(account_id: int, q: str = "", tag: str = "", page: int = 1,
+def contacts_list(account_id: int, q: str = "", tag: str = "", page: int = 1, flow: int = 0,
                   user: User = Depends(current_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
-    stmt = _contacts_query(db, acc, q.strip(), tag.strip())
+    stmt = _contacts_query(db, acc, q.strip(), tag.strip(), flow)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     per = 50
     rows = db.scalars(stmt.order_by(Contact.last_seen_at.desc()).offset((max(page, 1) - 1) * per).limit(per)).all()

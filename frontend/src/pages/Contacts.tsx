@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Download, Search, Users } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { Download, Search, Users, Workflow, X } from 'lucide-react'
 import { api, type Contact } from '../api'
 import { useAuth } from '../auth'
 import { useI18n, useTimeAgo } from '../i18n'
@@ -20,15 +21,19 @@ export default function Contacts() {
   const [open, setOpen] = useState<number | null>(null)
   const [stages, setStages] = useState<Stage[]>([])
   const [reload, setReload] = useState(0)
+  const [params, setParams] = useSearchParams()
+  const flow = params.get('flow') || ''
+  const [flowName, setFlowName] = useState('')
+  useEffect(() => { if (flow) api.get<{ name: string }>(`/api/flows/${flow}`).then(f => setFlowName(f.name)).catch(() => {}) }, [flow])
 
   useEffect(() => {
     if (!account) return
     const timer = setTimeout(() => {
-      const p = new URLSearchParams({ account_id: String(account.id), q, tag, page: String(page) })
+      const p = new URLSearchParams({ account_id: String(account.id), q, tag, page: String(page), ...(flow ? { flow } : {}) })
       api.get<ListResp>(`/api/contacts?${p}`).then(setData).catch(() => {})
     }, 250)
     return () => clearTimeout(timer)
-  }, [account, q, tag, page, reload])
+  }, [account, q, tag, page, reload, flow])
   useEffect(() => { if (account) api.get<{ stages: Stage[] }>(`/api/crm/stages?account_id=${account.id}`).then(r => setStages(r.stages)).catch(() => {}) }, [account])
 
   if (!account) return <Onboarding />
@@ -39,6 +44,12 @@ export default function Contacts() {
     <>
       <PageHeader title={t('ct.title')} sub={t('ct.sub')}
         action={<a href={exportUrl} className="inline-flex h-10 items-center gap-2 rounded-xl border border-line bg-white px-4 text-[14px] font-semibold hover:bg-soft"><Download className="h-4 w-4" />{t('common.export')}</a>} />
+      {flow && (
+        <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-brand-50 py-1 pl-3 pr-1 text-[13px] font-medium text-brand-700">
+          <Workflow className="h-3.5 w-3.5" />{flowName || `#${flow}`}
+          <button onClick={() => { params.delete('flow'); setParams(params); setPage(1) }} className="grid h-6 w-6 place-items-center rounded-full hover:bg-brand-100"><X className="h-3.5 w-3.5" /></button>
+        </div>
+      )}
       <div className="mb-4 flex flex-col gap-3 sm:flex-row">
         <div className="relative flex-1">
           <Search className="absolute left-3.5 top-3 h-4 w-4 text-ink-4" />
@@ -50,7 +61,7 @@ export default function Contacts() {
         </select>
       </div>
 
-      {!data ? <Spinner /> : data.total === 0 && !q && !tag ? (
+      {!data ? <Spinner /> : data.total === 0 && !q && !tag && !flow ? (
         <Empty icon={<Users className="h-6 w-6" />} title={t('ct.empty.t')} text={t('ct.empty.d')} />
       ) : (
         <div className="card overflow-hidden">

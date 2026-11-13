@@ -786,7 +786,14 @@ def resubscribe_all() -> None:
     try:
         for acc in db.scalars(select(IGAccount)).all():
             try:
-                ig.subscribe_webhooks(decrypt(acc.access_token_enc))
+                token = decrypt(acc.access_token_enc)
+                ig.subscribe_webhooks(token)
+                me = ig.get_me(token)
+                acc.username = me.get("username") or acc.username
+                acc.name = me.get("name") or acc.name
+                acc.picture_url = me.get("profile_picture_url") or acc.picture_url
+                acc.followers = int(me.get("followers_count") or acc.followers or 0)
+                db.commit()
                 log.info("resubscribe @%s: ok", acc.username)
             except Exception as e:  # noqa: BLE001
                 log.warning("resubscribe @%s: %s", acc.username, e)

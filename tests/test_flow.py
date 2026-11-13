@@ -1013,3 +1013,16 @@ def test_ai_manager(client, monkeypatch):
     client.delete("/api/team/ai", headers=H)
     client.put("/api/team/settings", json={"auto_assign": False}, headers=H)
     assert client.get("/api/team").json()["ai_manager"] is None
+
+
+def test_flow_analytics(client):
+    acc = S["acc"]
+    items = client.get(f"/api/flows?account_id={acc}").json()["items"]
+    busy = max(items, key=lambda f: f["users"])
+    assert busy["users"] >= 1 and 0 <= busy["conversion"] <= 100 and busy["last_run"]
+    a = client.get(f"/api/flows/{busy['id']}/analytics?days=7").json()
+    assert a["days"] == 7 and len(a["series"]["started"]) == 7 and a["started"] == busy["users"]
+    assert a["converted"] <= a["started"]
+    contacts = client.get(f"/api/contacts?account_id={acc}&flow={busy['id']}").json()
+    assert contacts["total"] == a["started"]
+    assert "followers" in client.get("/api/me").json()["accounts"][0]
