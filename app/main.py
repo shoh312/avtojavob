@@ -27,11 +27,13 @@ from . import instagram as ig
 from . import catalog, crm, services, tgbot
 from .config import settings
 from .db import get_db, init_db
+from .engine import contact_card as engine_contact_card
 from .engine import (broadcast_audience, log_event, process_payload, record_message, refresh_expiring_tokens,
                      resubscribe_all, run_broadcast, run_due_jobs, run_due_reminders)
-from .flows import blank_graph, build_template, list_templates, trigger_of, validate_graph
+from .flows import (blank_graph, build_template, generate_system, list_templates, normalize_generated, trigger_of,
+                    validate_graph)
 from .models import (LANGS, SEND_KINDS, Broadcast, Contact, EventLog, Flow, IGAccount, Message, NodeStat, Note,
-                     PlanGrant, Product, User, utcnow)
+                     PlanGrant, Product, TeamTg, User, utcnow)
 from .plans import (PLANS, TRIAL_DAYS, accounts_limit, get_setting, is_active, plan_json, plans_public,
                     set_setting)
 from .security import (decrypt, encrypt, hash_password, parse_signed_request, verify_password,
@@ -137,6 +139,17 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     return user
 
 
+def owner_user(user: User = Depends(current_user)) -> User:
+    """Faqat ish maydoni egasi (menejer emas)."""
+    if user.is_manager:
+        err("owner_only", 403)
+    return user
+
+
+def ws_id(user: User) -> int:
+    return user.owner_id or user.id
+
+
 def admin_user(user: User = Depends(current_user)) -> User:
     if not user.is_admin:
         err("forbidden", 403)
@@ -145,14 +158,14 @@ def admin_user(user: User = Depends(current_user)) -> User:
 
 def owned_account(db: Session, user: User, account_id: int) -> IGAccount:
     acc = db.get(IGAccount, account_id)
-    if not acc or acc.user_id != user.id:
+    if not acc or acc.user_id != ws_id(user):
         err("not_found", 404)
     return acc
 
 
 def owned_flow(db: Session, user: User, flow_id: int) -> Flow:
     flow = db.get(Flow, flow_id)
-    if not flow or flow.account.user_id != user.id:
+    if not flow or flow.account.user_id != ws_id(user):
         err("not_found", 404)
     return flow
 
@@ -163,7 +176,8 @@ def iso(dt) -> str | None:
 
 def user_json(u: User) -> dict:
     return {"id": u.id, "email": u.email, "name": u.name, "lang": u.lang, "is_admin": u.is_admin,
-            "plan": plan_json(u), "email_verified": u.email_verified}
+            "plan": plan_json(u.workspace), "email_verified": u.email_verified,
+            "role": "manager" if u.is_manager else "owner"}
 
 
 def account_json(a: IGAccount) -> dict:
@@ -184,7 +198,8 @@ def contact_json(c: Contact) -> dict:
     return {"id": c.id, "igsid": c.igsid, "username": c.username, "name": c.name, "tags": c.tags,
             "fields": c.fields, "follows": c.follows, "last_seen_at": iso(c.last_seen_at),
             "created_at": iso(c.created_at), "stage": c.stage, "deal_value": c.deal_value or 0,
-            "last_message_preview": c.last_message_preview, "last_message_at": iso(c.last_message_at)}
+            "last_message_preview": c.last_message_preview, "last_message_at": iso(c.last_message_at),
+            "assigned_to": c.assigned_to, "assignee": (c.assignee.name or c.assignee.email) if c.assignee else None}
 
 
 def detect_lang(request: Request) -> str:
@@ -248,14 +263,14 @@ def logout(request: Request):
 
 @app.get("/api/me")
 def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return {"user": user_json(user), "accounts": [account_json(a) for a in user.accounts],
+    return {"user": user_json(user), "accounts": [account_json(a) for a in user.workspace.accounts],
             "ig_ready": settings.ig_ready, "telegram": get_setting(db, "telegram_username"),
             "features": {"email": bool(services.smtp_config(db)), "ai": services.ai_available(db)}}
 
 
 @app.get("/api/plans")
 def plans(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return {**plans_public(db), "current": plan_json(user)}
+    return {**plans_public(db), "current": plan_json(user.workspace)}
 
 
 @app.patch("/api/me")
@@ -311,6 +326,8 @@ def instagram_callback(request: Request, code: str | None = None, state: str | N
 
     ig_user_id = str(me_.get("user_id") or short.get("user_id"))
     acc = db.scalar(select(IGAccount).where(IGAccount.ig_user_id == ig_user_id))
+    if user.is_manager:
+        return back("owner_only")
     if acc and acc.user_id != user.id:
         return back("account_taken")
     if not acc and len(user.accounts) >= accounts_limit(user):
@@ -330,7 +347,7 @@ def instagram_callback(request: Request, code: str | None = None, state: str | N
 
 
 @app.post("/api/accounts/{account_id}/toggle")
-def account_toggle(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def account_toggle(account_id: int, user: User = Depends(owner_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
     acc.active = not acc.active
     db.commit()
@@ -338,7 +355,7 @@ def account_toggle(account_id: int, user: User = Depends(current_user), db: Sess
 
 
 @app.delete("/api/accounts/{account_id}")
-def account_delete(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def account_delete(account_id: int, user: User = Depends(owner_user), db: Session = Depends(get_db)):
     db.delete(owned_account(db, user, account_id))
     db.commit()
     return {"ok": True}
@@ -511,7 +528,7 @@ def contacts_list(account_id: int, q: str = "", tag: str = "", page: int = 1,
 def contact_update(contact_id: int, body: dict = Body(...), user: User = Depends(current_user),
                    db: Session = Depends(get_db)):
     c = db.get(Contact, contact_id)
-    if not c or c.account.user_id != user.id:
+    if not c or c.account.user_id != ws_id(user):
         err("not_found", 404)
     if isinstance(body.get("tags"), list):
         c.tags = body["tags"]
@@ -530,6 +547,15 @@ def contact_update(contact_id: int, body: dict = Body(...), user: User = Depends
         if stage is not None and not crm.stage_by_id(c.account, stage):
             err("bad_stage")
         crm.set_stage(db, c, stage, user.name or user.email)
+    if "assigned_to" in body:
+        target = body["assigned_to"]
+        member = db.get(User, int(target)) if target else None
+        if target and (not member or ws_id(member) != ws_id(user)):
+            err("bad_member")
+        if (member.id if member else None) != c.assigned_to:
+            crm.assign(db, c, member, user.name or user.email)
+            if member and member.id != user.id:
+                tgbot.notify(db, c.account, engine_contact_card(c, "👤 " + (c.username and f"@{c.username}" or c.name or "")), c, member.id)
     return contact_json(c)
 
 
@@ -1055,7 +1081,7 @@ def integrations_get(account_id: int, user: User = Depends(current_user), db: Se
 
 
 @app.put("/api/accounts/{account_id}/integrations")
-def integrations_save(account_id: int, body: dict = Body(...), user: User = Depends(current_user),
+def integrations_save(account_id: int, body: dict = Body(...), user: User = Depends(owner_user),
                       db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
     if "ai_prompt" in body:
@@ -1068,7 +1094,7 @@ def integrations_save(account_id: int, body: dict = Body(...), user: User = Depe
 
 
 @app.post("/api/accounts/{account_id}/telegram")
-def telegram_connect(account_id: int, body: dict = Body(...), user: User = Depends(current_user),
+def telegram_connect(account_id: int, body: dict = Body(...), user: User = Depends(owner_user),
                      db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
     token = str(body.get("bot_token") or "").strip()
@@ -1082,13 +1108,14 @@ def telegram_connect(account_id: int, body: dict = Body(...), user: User = Depen
     acc.tg_bot_token_enc = encrypt(token)
     acc.tg_chat_id = chat_id
     acc.tg_chat_title = title[:255]
+    acc.tg_bot_username = services.LAST_BOT_USERNAME[:64]
     db.commit()
     services.telegram_send(acc.tg_bot_token_enc, chat_id, f"✅ ChatFlow: @{acc.username}\n\n{tgbot.t(acc, 'help')}")
     return _integrations_json(db, acc)
 
 
 @app.delete("/api/accounts/{account_id}/telegram")
-def telegram_disconnect(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def telegram_disconnect(account_id: int, user: User = Depends(owner_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
     if acc.tg_bot_token_enc:
         try:
@@ -1123,7 +1150,7 @@ def ai_test(account_id: int, body: dict = Body(...), user: User = Depends(curren
 
 def _owned_contact(db: Session, user: User, contact_id: int) -> Contact:
     c = db.get(Contact, contact_id)
-    if not c or c.account.user_id != user.id:
+    if not c or c.account.user_id != ws_id(user):
         err("not_found", 404)
     return c
 
@@ -1164,7 +1191,7 @@ def inbox_send(contact_id: int, body: dict = Body(...), user: User = Depends(cur
     text = str(body.get("text") or "").strip()
     if not text or len(text) > 1000:
         err("message_text")
-    if not is_active(user):
+    if not is_active(user.workspace):
         err("plan_inactive")
     if not c.can_message():
         err("window_closed")
@@ -1216,7 +1243,7 @@ def broadcasts_audience(account_id: int, tag: str = "", user: User = Depends(cur
 @app.post("/api/broadcasts")
 def broadcasts_create(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, int(body.get("account_id") or 0))
-    if not is_active(user):
+    if not is_active(user.workspace):
         err("plan_inactive")
     text = str(body.get("text") or "").strip()
     buttons = []
@@ -1254,7 +1281,7 @@ def _product_json(p: Product) -> dict:
 
 def _owned_product(db: Session, user: User, product_id: int) -> Product:
     p = db.get(Product, product_id)
-    if not p or db.get(IGAccount, p.account_id).user_id != user.id:
+    if not p or db.get(IGAccount, p.account_id).user_id != ws_id(user):
         err("not_found", 404)
     return p
 
@@ -1336,15 +1363,169 @@ async def upload_image(file: UploadFile = File(...), user: User = Depends(curren
     return {"image": name, "image_url": f"{settings.APP_URL}/uploads/{name}"}
 
 
+# ---------------------------------------------------------------- jamoa (menejerlar)
+
+def _team_options(db: Session, user: User) -> list[dict]:
+    owner = user.workspace
+    return [{"id": u.id, "name": u.name or u.email, "role": "owner" if u.id == owner.id else "manager"}
+            for u in [owner, *crm.team_members(db, owner.id)]]
+
+
+def _member_json(db: Session, owner: User, u: User) -> dict:
+    links = []
+    for acc in owner.accounts:
+        if acc.tg_bot_token_enc:
+            linked = db.scalar(select(TeamTg).where(TeamTg.user_id == u.id, TeamTg.account_id == acc.id)) is not None
+            link = f"https://t.me/{acc.tg_bot_username}?start={tgbot.start_token(u.id, acc.id)}" if acc.tg_bot_username else ""
+            links.append({"account_id": acc.id, "username": acc.username, "linked": linked, "link": link})
+    assigned = db.scalar(select(func.count(Contact.id)).where(Contact.assigned_to == u.id)) or 0
+    return {"id": u.id, "name": u.name, "email": u.email, "created_at": iso(u.created_at),
+            "last_login_at": iso(u.last_login_at), "assigned": assigned, "telegram": links}
+
+
+@app.get("/api/team")
+def team_list(user: User = Depends(owner_user), db: Session = Depends(get_db)):
+    return {"members": [_member_json(db, user, m) for m in crm.team_members(db, user.id)], "auto_assign": user.auto_assign}
+
+
+@app.post("/api/team")
+def team_add(body: dict = Body(...), user: User = Depends(owner_user), db: Session = Depends(get_db)):
+    email = str(body.get("email") or "").strip().lower()
+    if "@" not in email or len(email) > 255:
+        err("email_invalid")
+    if db.scalar(select(User).where(User.email == email)):
+        err("email_taken")
+    if len(crm.team_members(db, user.id)) >= 20:
+        err("too_many")
+    password = secrets.token_urlsafe(8)
+    member = User(email=email, name=str(body.get("name") or "").strip()[:120], password_hash=hash_password(password),
+                  lang=user.lang, owner_id=user.id, plan="trial")
+    db.add(member)
+    db.commit()
+    return {**_member_json(db, user, member), "password": password}
+
+
+@app.post("/api/team/{member_id}/password")
+def team_password(member_id: int, user: User = Depends(owner_user), db: Session = Depends(get_db)):
+    m = db.get(User, member_id)
+    if not m or m.owner_id != user.id:
+        err("not_found", 404)
+    password = secrets.token_urlsafe(8)
+    m.password_hash = hash_password(password)
+    db.commit()
+    return {"password": password}
+
+
+@app.delete("/api/team/{member_id}")
+def team_remove(member_id: int, user: User = Depends(owner_user), db: Session = Depends(get_db)):
+    m = db.get(User, member_id)
+    if not m or m.owner_id != user.id:
+        err("not_found", 404)
+    for c in db.scalars(select(Contact).where(Contact.assigned_to == m.id)):
+        c.assigned_to = None
+    db.delete(m)
+    db.commit()
+    return {"ok": True}
+
+
+@app.put("/api/team/settings")
+def team_settings(body: dict = Body(...), user: User = Depends(owner_user), db: Session = Depends(get_db)):
+    if "auto_assign" in body:
+        user.auto_assign = bool(body["auto_assign"])
+    db.commit()
+    return {"auto_assign": user.auto_assign}
+
+
+# ---------------------------------------------------------------- eslatmalar va onboarding
+
+@app.get("/api/reminders")
+def reminders(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    stmt = select(Note).where(Note.account_id == acc.id, Note.remind_at.is_not(None), Note.reminded.is_(False))
+    if user.is_manager:
+        stmt = stmt.where(or_(Note.created_by == user.id, Note.contact_id.in_(
+            select(Contact.id).where(Contact.assigned_to == user.id))))
+    rows = db.scalars(stmt.order_by(Note.remind_at).limit(20)).all()
+    out = []
+    for n in rows:
+        c = db.get(Contact, n.contact_id)
+        out.append({"id": n.id, "text": n.text, "remind_at": iso(n.remind_at), "contact_id": n.contact_id,
+                    "contact": (f"@{c.username}" if c and c.username else (c.name if c else "")) or "—"})
+    my = db.scalar(select(func.count(Contact.id)).where(Contact.account_id == acc.id, Contact.assigned_to == user.id,
+                                                         Contact.stage.is_not(None))) or 0
+    return {"items": out, "my_leads": my}
+
+
+@app.get("/api/onboarding")
+def onboarding(account_id: int = 0, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    owner = user.workspace
+    acc = db.get(IGAccount, account_id) if account_id else None
+    if acc and acc.user_id != owner.id:
+        acc = None
+    acc = acc or (owner.accounts[0] if owner.accounts else None)
+    steps = {"instagram": bool(owner.accounts), "products": False, "ai": False, "flow": False,
+             "telegram": False, "team": bool(crm.team_members(db, owner.id))}
+    if acc:
+        steps["products"] = (db.scalar(select(func.count(Product.id)).where(Product.account_id == acc.id)) or 0) > 0
+        steps["ai"] = bool(acc.ai_enabled and acc.ai_prompt.strip())
+        steps["flow"] = (db.scalar(select(func.count(Flow.id)).where(Flow.account_id == acc.id, Flow.active.is_(True))) or 0) > 0
+        steps["telegram"] = bool(acc.tg_chat_id)
+    return {"steps": steps, "done": sum(steps.values()), "total": len(steps)}
+
+
+# ---------------------------------------------------------------- AI bilan ssenariy yaratish
+
+@app.post("/api/flows/generate")
+def flow_generate(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, int(body.get("account_id") or 0))
+    idea = str(body.get("prompt") or "").strip()[:2000]
+    if len(idea) < 5:
+        err("empty")
+    if not services.ai_available(db):
+        err("ai_unavailable")
+    stages = crm.get_stages(acc)
+    products = [p.name for p in catalog.active_products(db, acc.id)]
+    text, error = services.ai_complete(db, generate_system(user.lang, stages, products), idea, json_mode=True)
+    if not text:
+        return JSONResponse({"error": "ai_failed", "detail": error or ""}, status_code=400)
+    raw = text.strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`").split("\n", 1)[-1].rsplit("```", 1)[0]
+    try:
+        start, end = raw.index("{"), raw.rindex("}") + 1
+        name, graph = normalize_generated(json.loads(raw[start:end]), {s["id"] for s in stages})
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "ai_failed", "detail": "bad json"}, status_code=400)
+    flow = Flow(account_id=acc.id, name=name, active=False)
+    flow.graph = graph
+    flow.trigger_kind = graph["nodes"][0]["data"].get("kind", "")
+    db.add(flow)
+    db.commit()
+    return {**flow_summary(flow), "errors": validate_graph(graph)}
+
+
 # ---------------------------------------------------------------- CRM
 
 @app.get("/api/crm")
-def crm_board(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def crm_board(account_id: int, q: str = "", assigned: str = "", user: User = Depends(current_user),
+              db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
     stages = crm.get_stages(acc)
     ids = [s["id"] for s in stages]
-    cards = db.scalars(select(Contact).where(Contact.account_id == acc.id, Contact.stage.in_(ids))
-                       .order_by(Contact.stage_changed_at.desc()).limit(1000)).all()
+    stmt = select(Contact).where(Contact.account_id == acc.id, Contact.stage.in_(ids))
+    if q.strip():
+        like = f"%{q.strip().lower()}%"
+        stmt = stmt.where(or_(func.lower(Contact.username).like(like), func.lower(Contact.name).like(like),
+                              func.lower(Contact.fields_json).like(like)))
+    if assigned == "me":
+        stmt = stmt.where(Contact.assigned_to == user.id)
+    elif assigned == "none":
+        stmt = stmt.where(Contact.assigned_to.is_(None))
+    elif assigned.isdigit():
+        stmt = stmt.where(Contact.assigned_to == int(assigned))
+    cards = db.scalars(stmt.order_by(Contact.stage_changed_at.desc()).limit(1000)).all()
+    reminders = dict(db.execute(select(Note.contact_id, func.min(Note.remind_at)).where(
+        Note.account_id == acc.id, Note.remind_at.is_not(None), Note.reminded.is_(False)).group_by(Note.contact_id)).all())
     notes = dict(db.execute(select(Note.contact_id, func.count(Note.id)).where(
         Note.account_id == acc.id, Note.kind == "note").group_by(Note.contact_id)).all())
     totals = {sid: {"count": 0, "sum": 0} for sid in ids}
@@ -1352,7 +1533,9 @@ def crm_board(account_id: int, user: User = Depends(current_user), db: Session =
         totals[c.stage]["count"] += 1
         totals[c.stage]["sum"] += c.deal_value or 0
     return {"stages": stages, "totals": totals,
-            "cards": [{**contact_json(c), "notes": notes.get(c.id, 0)} for c in cards]}
+            "cards": [{**contact_json(c), "notes": notes.get(c.id, 0), "next_reminder": iso(reminders.get(c.id))}
+                      for c in cards],
+            "team": _team_options(db, user)}
 
 
 @app.get("/api/crm/stages")
@@ -1361,7 +1544,7 @@ def crm_stages(account_id: int, user: User = Depends(current_user), db: Session 
 
 
 @app.put("/api/crm/stages")
-def crm_stages_save(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+def crm_stages_save(body: dict = Body(...), user: User = Depends(owner_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, int(body.get("account_id") or 0))
     stages = crm.validate_stages(body.get("stages"))
     if isinstance(stages, str):
@@ -1386,7 +1569,8 @@ def contact_timeline(contact_id: int, user: User = Depends(current_user), db: Se
     items += [{"type": "message", "id": f"m{m.id}", "text": m.text, "direction": m.direction, "source": m.source,
                "created_at": iso(m.created_at)} for m in msgs]
     items.sort(key=lambda x: x["created_at"] or "", reverse=True)
-    return {"contact": contact_json(c), "stages": crm.get_stages(c.account), "items": items[:120]}
+    return {"contact": contact_json(c), "stages": crm.get_stages(c.account), "items": items[:120],
+            "team": _team_options(db, user)}
 
 
 @app.post("/api/contacts/{contact_id}/notes")
@@ -1395,7 +1579,7 @@ def contact_note(contact_id: int, body: dict = Body(...), user: User = Depends(c
     text = str(body.get("text") or "").strip()
     if not text:
         err("empty")
-    note = crm.add_note(db, c, text, user.name or user.email)
+    note = crm.add_note(db, c, text, user.name or user.email, created_by=user.id)
     if body.get("remind_at"):
         try:
             when = datetime.fromisoformat(str(body["remind_at"]).replace("Z", "+00:00"))

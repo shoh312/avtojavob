@@ -282,3 +282,103 @@ def list_templates(lang: str) -> list[dict]:
     icons = {"price": "tag", "gift": "gift", "lead": "phone", "story": "circle-dot"}
     return [{"key": k, "icon": icons[k], "name": _t(f"{k}_name", lang), "description": _t(f"{k}_desc", lang)}
             for k in TEMPLATE_KEYS]
+
+
+# ---------------------------------------------------------------- AI ssenariy yaratish
+
+LANG_NAMES = {"uz": "Uzbek (Latin)", "ru": "Russian", "tj": "Tajik (Cyrillic)", "en": "English"}
+
+
+def generate_system(lang: str, stages: list[dict], products: list[str]) -> str:
+    stage_ids = ", ".join(f'"{s["id"]}" ({s["name"]})' for s in stages)
+    prods = ", ".join(products) if products else "none"
+    return f"""You design Instagram Direct automation flows for a business. Return ONLY a JSON object:
+{{"name": "short flow name", "nodes": [...], "edges": [...]}}
+
+Node: {{"id": "n1", "type": "...", "data": {{...}}}}. Exactly ONE node of type "trigger". Types and data:
+- trigger: {{"kind": "comment"|"dm"|"story_reply"|"story_mention", "keywords": "comma, separated, words", "match": "contains"|"exact"|"any", "comment_replies": "optional public replies to the comment, one per line"}}
+- message: {{"text": "...", "buttons": [{{"id": "b1", "title": "max 20 chars", "kind": "flow"|"url", "url": "https://..."}}]}} (max 3 buttons; text max 640 chars with buttons)
+- question: {{"text": "...", "field": "phone"|"email"|"name"|"custom", "custom_key": "latin_key", "validate": "any"|"phone"|"email"|"number", "error_text": "..."}}
+- condition: {{"check": "follows"|"has_tag"|"has_field", "tag": "...", "field": "..."}}
+- action: {{"op": "add_tag"|"remove_tag"|"set_field"|"set_stage"|"notify", "tag": "...", "field": "...", "value": "...", "stage": "<stage id>", "text": "notification title"}}
+- delay: {{"amount": 10, "unit": "minutes"|"hours"}} (max 23 hours)
+
+Edge: {{"source": "n1", "target": "n2", "sourceHandle": "out"|"btn:<button id>"|"yes"|"no"}}
+- "out" = continue to the next block; "btn:<id>" = when that "flow" button is tapped; "yes"/"no" for conditions.
+- A message that has "flow" buttons must NOT have an "out" edge — the flow continues from its buttons.
+- After a COMMENT trigger Instagram allows only one message until the person taps a button, so the first message after a comment trigger should have a "flow" button.
+- "follows" condition works only after the person tapped a button or wrote a message.
+- Question blocks save the answer to the contact; use them to collect phone numbers.
+- Use set_stage with one of these CRM stage ids: {stage_ids}.
+- Products of the business: {prods}.
+- Write ALL customer-facing texts in {LANG_NAMES.get(lang, "English")}. You may use the {{username}} placeholder.
+- Keep it practical: 3-8 blocks."""
+
+
+def normalize_generated(data: dict, stage_ids: set[str]) -> tuple[str, dict]:
+    """AI javobini ishonchli grafga aylantiradi: id'lar, tugmalar, chiziqlar, joylashuv."""
+    raw_nodes = [n for n in (data.get("nodes") or []) if isinstance(n, dict) and n.get("type") in NODE_TYPES]
+    triggers = [n for n in raw_nodes if n["type"] == "trigger"]
+    if not triggers:
+        raise ValueError("no trigger")
+    raw_nodes = [triggers[0]] + [n for n in raw_nodes if n["type"] != "trigger"]
+    id_map, nodes = {}, []
+    for n in raw_nodes[:MAX_NODES]:
+        nid = _id()
+        id_map[str(n.get("id") or nid)] = nid
+        d = n.get("data") if isinstance(n.get("data"), dict) else {}
+        if n["type"] == "message":
+            buttons = []
+            for b in (d.get("buttons") or [])[:3]:
+                if not isinstance(b, dict):
+                    continue
+                buttons.append({"id": str(b.get("id") or _id())[:20], "title": str(b.get("title") or "")[:20],
+                                "kind": "url" if b.get("kind") == "url" else "flow", "url": str(b.get("url") or "")})
+            d = {"text": str(d.get("text") or "")[:1000], "buttons": buttons}
+        elif n["type"] == "trigger":
+            d = {"kind": d.get("kind") if d.get("kind") in TRIGGER_KINDS else "dm", "keywords": str(d.get("keywords") or ""),
+                 "match": d.get("match") if d.get("match") in MATCH_MODES else "contains", "media_id": None,
+                 "media_caption": "", "comment_replies": str(d.get("comment_replies") or "")}
+        elif n["type"] == "action" and d.get("op") == "set_stage" and d.get("stage") not in stage_ids:
+            d = {**d, "stage": next(iter(stage_ids), "")}
+        nodes.append({"id": nid, "type": n["type"], "data": d, "position": {"x": 0, "y": 0}})
+    by_id = {n["id"]: n for n in nodes}
+
+    def valid_handle(node: dict, handle: str) -> bool:
+        if node["type"] == "condition":
+            return handle in ("yes", "no")
+        if node["type"] == "message":
+            flow_btns = [b["id"] for b in node["data"]["buttons"] if b["kind"] == "flow"]
+            return handle in [f"btn:{b}" for b in flow_btns] if flow_btns else handle == "out"
+        return handle == "out"
+
+    edges, used = [], set()
+    for e in data.get("edges") or []:
+        if not isinstance(e, dict):
+            continue
+        src, dst = id_map.get(str(e.get("source"))), id_map.get(str(e.get("target")))
+        handle = str(e.get("sourceHandle") or "out")
+        if not src or not dst or src == dst or by_id[dst]["type"] == "trigger":
+            continue
+        if not valid_handle(by_id[src], handle) or (src, handle) in used:
+            continue
+        used.add((src, handle))
+        edges.append({"id": _id(), "source": src, "target": dst, "sourceHandle": handle})
+
+    # Joylashuv: triggerdan chapdan o'ngga qatlamlar
+    layer = {nodes[0]["id"]: 0}
+    queue = [nodes[0]["id"]]
+    while queue:
+        cur = queue.pop(0)
+        for e in edges:
+            if e["source"] == cur and e["target"] not in layer:
+                layer[e["target"]] = layer[cur] + 1
+                queue.append(e["target"])
+    max_layer = max(layer.values()) if layer else 0
+    rows: dict[int, int] = {}
+    for n in nodes:
+        lv = layer.get(n["id"], max_layer + 1)
+        n["position"] = {"x": lv * 380, "y": rows.get(lv, 0) * 240}
+        rows[lv] = rows.get(lv, 0) + 1
+    name = str(data.get("name") or "AI").strip()[:120] or "AI"
+    return name, {"nodes": nodes, "edges": edges}

@@ -5,7 +5,9 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from .models import Contact, IGAccount, Note, utcnow
+from sqlalchemy import func, select
+
+from .models import Contact, IGAccount, Note, User, utcnow
 
 COLORS = ("sky", "violet", "amber", "emerald", "rose", "slate", "orange", "teal")
 TYPES = ("open", "won", "lost")
@@ -56,8 +58,9 @@ def stage_by_id(account: IGAccount, stage_id: str | None) -> dict | None:
     return next((s for s in get_stages(account) if s["id"] == stage_id), None)
 
 
-def add_note(db: Session, contact: Contact, text: str, author: str, kind: str = "note") -> Note:
-    note = Note(account_id=contact.account_id, contact_id=contact.id, kind=kind, author=author[:120], text=text[:2000])
+def add_note(db: Session, contact: Contact, text: str, author: str, kind: str = "note", created_by: int | None = None) -> Note:
+    note = Note(account_id=contact.account_id, contact_id=contact.id, kind=kind, author=author[:120], text=text[:2000],
+                created_by=created_by)
     db.add(note)
     db.commit()
     return note
@@ -75,4 +78,32 @@ def set_stage(db: Session, contact: Contact, stage_id: str | None, author: str) 
     contact.stage_changed_at = utcnow()
     db.commit()
     add_note(db, contact, f"{old['name'] if old else '—'} → {new['name'] if new else '—'}", author, kind="stage")
+    if old is None and new is not None and contact.assigned_to is None:
+        auto_assign(db, contact)
     return True
+
+
+def team_members(db: Session, owner_id: int) -> list[User]:
+    return db.scalars(select(User).where(User.owner_id == owner_id, User.is_blocked.is_(False)).order_by(User.id)).all()
+
+
+def assign(db: Session, contact: Contact, user: User | None, author: str) -> None:
+    contact.assigned_to = user.id if user else None
+    db.commit()
+    add_note(db, contact, f"👤 {(user.name or user.email) if user else '—'}", author, kind="stage")
+
+
+def auto_assign(db: Session, contact: Contact) -> None:
+    """Yangi lid — eng kam ochiq mijozi bor menejerga (egasi yoqqan bo'lsa)."""
+    owner = contact.account.user
+    if not owner or not owner.auto_assign:
+        return
+    members = team_members(db, owner.id)
+    if not members:
+        return
+    open_ids = [s["id"] for s in get_stages(contact.account) if s["type"] == "open"]
+    load = dict(db.execute(select(Contact.assigned_to, func.count(Contact.id)).where(
+        Contact.account_id == contact.account_id, Contact.stage.in_(open_ids), Contact.assigned_to.is_not(None))
+        .group_by(Contact.assigned_to)).all())
+    member = min(members, key=lambda m: (load.get(m.id, 0), m.id))
+    assign(db, contact, member, "⚡ auto")

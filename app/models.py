@@ -32,10 +32,23 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     google_sub: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Jamoa: menejer bo'lsa — ish maydoni egasining id'si
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    auto_assign: Mapped[bool] = mapped_column(Boolean, default=False)  # yangi lidlarni menejerlarga taqsimlash
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
+    owner: Mapped["User | None"] = relationship(remote_side="User.id", foreign_keys=[owner_id])
+
+    @property
+    def is_manager(self) -> bool:
+        return self.owner_id is not None
+
+    @property
+    def workspace(self) -> "User":
+        return self.owner or self
+
     accounts: Mapped[list["IGAccount"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan", order_by="IGAccount.id"
+        back_populates="user", cascade="all, delete-orphan", order_by="IGAccount.id", foreign_keys="IGAccount.user_id"
     )
 
 
@@ -66,6 +79,7 @@ class IGAccount(Base):
     tg_notify_inbox: Mapped[bool] = mapped_column(Boolean, default=False)
     tg_notify_all: Mapped[bool] = mapped_column(Boolean, default=False)
     tg_secret: Mapped[str] = mapped_column(String(64), default="")
+    tg_bot_username: Mapped[str] = mapped_column(String(64), default="")
     # CRM bosqichlari (bo'sh — standart bosqichlar egasining tilida)
     crm_stages_json: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -136,10 +150,12 @@ class Contact(Base):
     stage: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     deal_value: Mapped[int] = mapped_column(Integer, default=0)
     stage_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    assigned_to: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     account: Mapped[IGAccount] = relationship(back_populates="contacts")
+    assignee: Mapped["User | None"] = relationship(foreign_keys=[assigned_to])
     sessions: Mapped[list["FlowSession"]] = relationship(cascade="all, delete-orphan")
     jobs: Mapped[list["ScheduledJob"]] = relationship(cascade="all, delete-orphan")
 
@@ -312,6 +328,7 @@ class Note(Base):
     author: Mapped[str] = mapped_column(String(120), default="")
     text: Mapped[str] = mapped_column(Text, default="")
     remind_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     reminded: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
@@ -324,6 +341,7 @@ class TgLink(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("ig_accounts.id", ondelete="CASCADE"), index=True)
     tg_message_id: Mapped[int] = mapped_column(Integer, index=True)
+    chat_id: Mapped[str] = mapped_column(String(64), default="")
     contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -342,4 +360,17 @@ class Product(Base):
     url: Mapped[str] = mapped_column(String(500), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class TeamTg(Base):
+    """Menejerning shaxsiy Telegram chati (har bir Instagram akkaunt boti uchun)."""
+
+    __tablename__ = "team_tg"
+    __table_args__ = (UniqueConstraint("user_id", "account_id", name="uq_team_tg"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("ig_accounts.id", ondelete="CASCADE"), index=True)
+    chat_id: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -22,6 +22,7 @@ import Broadcasts from './pages/Broadcasts'
 import Integrations from './pages/Integrations'
 import Crm from './pages/Crm'
 import Products from './pages/Products'
+import Team from './pages/Team'
 import { Forgot, Reset } from './pages/Recover'
 import AdminOverviewPage from './pages/admin/AdminOverview'
 import AdminUsers from './pages/admin/AdminUsers'
@@ -71,6 +72,7 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="inbox" element={<Inbox />} />
                 <Route path="crm" element={<Crm />} />
                 <Route path="products" element={<Products />} />
+                <Route path="team" element={<Team />} />
                 <Route path="broadcasts" element={<Broadcasts />} />
                 <Route path="integrations" element={<Integrations />} />
                 <Route path="admin" element={<AdminOnly><AdminOverviewPage /></AdminOnly>} />

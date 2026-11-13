@@ -141,14 +141,16 @@ def _clean_history(history: list[dict]) -> list[dict]:
     return out
 
 
-def _gemini(db: Session, system: str, history: list[dict]) -> tuple[str | None, str | None]:
+def _gemini(db: Session, system: str, history: list[dict], json_mode: bool = False,
+            max_tokens: int = 2048) -> tuple[str | None, str | None]:
     key = get_secret(db, "gemini_api_key")
     model = (get_setting(db, "gemini_model") or GEMINI_DEFAULT_MODEL).strip()
     body = {
         "system_instruction": {"parts": [{"text": system}]},
         "contents": [{"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
                      for m in history],
-        "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.4},
+        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.4,
+                             **({"responseMimeType": "application/json"} if json_mode else {})},
     }
     try:
         r = _http.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
@@ -168,12 +170,13 @@ def _gemini(db: Session, system: str, history: list[dict]) -> tuple[str | None, 
     return text.strip() or None, None if text.strip() else "empty answer"
 
 
-def _claude(db: Session, system: str, history: list[dict]) -> tuple[str | None, str | None]:
+def _claude(db: Session, system: str, history: list[dict], json_mode: bool = False,
+            max_tokens: int = 2000) -> tuple[str | None, str | None]:
     client = anthropic.Anthropic(api_key=get_secret(db, "anthropic_api_key"), timeout=60, max_retries=2)
     try:
         response = client.beta.messages.create(
             model=AI_MODEL,
-            max_tokens=2000,
+            max_tokens=max_tokens,
             system=system,
             messages=history,
             output_config={"effort": "low"},
@@ -224,6 +227,15 @@ def ai_generate(db: Session, business_prompt: str, history: list[dict], leads: s
     return (text[:950] if text else None), error
 
 
+def ai_complete(db: Session, system: str, user_text: str, json_mode: bool = False,
+                max_tokens: int = 8000) -> tuple[str | None, str | None]:
+    """Bir martalik so'rov (masalan, ssenariy yaratish)."""
+    if not ai_available(db):
+        return None, "not configured"
+    fn = _gemini if ai_provider(db) == "gemini" else _claude
+    return fn(db, system, [{"role": "user", "content": user_text}], json_mode=json_mode, max_tokens=max_tokens)
+
+
 def ai_reply(db: Session, business_prompt: str, history: list[dict], leads: str = "off", catalog: str = "") -> str | None:
     return ai_generate(db, business_prompt, history, leads, catalog)[0]
 
@@ -247,7 +259,7 @@ def _tg(token: str, method: str, **params) -> dict:
 
 def telegram_connect(token: str, webhook: str | None = None, secret: str | None = None) -> tuple[str, str]:
     """Botni tekshiradi, unga oxirgi yozgan chatni topadi va webhook o'rnatadi -> (chat_id, title)."""
-    _tg(token, "getMe")
+    me = _tg(token, "getMe")
     try:
         _tg(token, "deleteWebhook")  # getUpdates webhook bilan birga ishlamaydi
     except TelegramError:
@@ -256,7 +268,12 @@ def telegram_connect(token: str, webhook: str | None = None, secret: str | None 
     chat = _last_chat(updates)
     if webhook and webhook.startswith("https://"):
         _tg(token, "setWebhook", url=webhook, secret_token=secret, allowed_updates=["message", "callback_query"])
+    global LAST_BOT_USERNAME
+    LAST_BOT_USERNAME = (me or {}).get("username") or ""
     return chat
+
+
+LAST_BOT_USERNAME = ""
 
 
 def _last_chat(updates: list) -> tuple[str, str]:

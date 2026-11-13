@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type DragEvent, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
-import { AlarmClock, ArrowDown, ArrowUp, KanbanSquare, MessageCircle, Phone, Plus, Settings2, StickyNote, Trash2 } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { AlarmClock, ArrowDown, ArrowUp, KanbanSquare, MessageCircle, Phone, Plus, Search, Settings2, StickyNote, Trash2 } from 'lucide-react'
 import { api, ApiError, type Contact } from '../api'
 import { useAuth } from '../auth'
 import { useI18n, useTimeAgo, type TKey } from '../i18n'
@@ -9,8 +9,9 @@ import { fmtNum } from '../components/charts'
 import { Onboarding } from './Home'
 
 export type Stage = { id: string; name: string; color: string; type: 'open' | 'won' | 'lost' }
-type Card = Contact & { stage: string; deal_value: number; notes: number; last_message_preview: string }
-type Board = { stages: Stage[]; totals: Record<string, { count: number; sum: number }>; cards: Card[] }
+type TeamOpt = { id: number; name: string; role: 'owner' | 'manager' }
+type Card = Contact & { stage: string; deal_value: number; notes: number; last_message_preview: string; assigned_to: number | null; assignee: string | null; next_reminder: string | null }
+type Board = { stages: Stage[]; totals: Record<string, { count: number; sum: number }>; cards: Card[]; team: TeamOpt[] }
 type TItem = { type: 'note' | 'stage' | 'message'; id: string; text: string; author?: string; direction?: string; source?: string; created_at: string; remind_at?: string | null; reminded?: boolean }
 
 export const STAGE_DOT: Record<string, string> = {
@@ -23,12 +24,12 @@ export function ContactPanel({ id, onClose, onChanged }: { id: number; onClose: 
   const { t } = useI18n()
   const ago = useTimeAgo()
   const toast = useToast()
-  const [d, setD] = useState<{ contact: Card; stages: Stage[]; items: TItem[] } | null>(null)
+  const [d, setD] = useState<{ contact: Card; stages: Stage[]; items: TItem[]; team: TeamOpt[] } | null>(null)
   const [value, setValue] = useState('')
   const [note, setNote] = useState('')
   const [remind, setRemind] = useState('')
   const [tag, setTag] = useState('')
-  const load = useCallback(() => api.get<{ contact: Card; stages: Stage[]; items: TItem[] }>(`/api/contacts/${id}/timeline`)
+  const load = useCallback(() => api.get<{ contact: Card; stages: Stage[]; items: TItem[]; team: TeamOpt[] }>(`/api/contacts/${id}/timeline`)
     .then(r => { setD(r); setValue(String(r.contact.deal_value || '')) }), [id])
   useEffect(() => { load().catch(() => {}) }, [load])
 
@@ -54,6 +55,13 @@ export function ContactPanel({ id, onClose, onChanged }: { id: number; onClose: 
                 <option value="">{t('crm.no_stage')}</option>
                 {d.stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select></label>
+            {d.team.length > 1 && (
+              <label className="block"><span className="label">{t('crm.assignee')}</span>
+                <select className="input" value={c.assigned_to ?? ''} onChange={e => patch({ assigned_to: e.target.value ? Number(e.target.value) : null })}>
+                  <option value="">{t('crm.unassigned')}</option>
+                  {d.team.map(m => <option key={m.id} value={m.id}>{m.name}{m.role === 'owner' ? ' ★' : ''}</option>)}
+                </select></label>
+            )}
             <label className="block"><span className="label">{t('crm.value')}</span>
               <input type="number" min={0} className="input" value={value} placeholder="0" onChange={e => setValue(e.target.value)}
                 onBlur={() => Number(value || 0) !== (c.deal_value || 0) && patch({ deal_value: Number(value || 0) })} /></label>
@@ -167,12 +175,16 @@ export default function Crm() {
   const [open, setOpen] = useState<number | null>(null)
   const [settings, setSettings] = useState(false)
   const [over, setOver] = useState<string | null>(null)
+  const [params, setParams] = useSearchParams()
+  const [q, setQ] = useState('')
+  const assigned = params.get('assigned') || ''
 
   const load = useCallback(() => {
     if (!account) return
-    api.get<Board>(`/api/crm?account_id=${account.id}`).then(setBoard).catch(() => {})
-  }, [account])
-  useEffect(() => { load() }, [load])
+    const p = new URLSearchParams({ account_id: String(account.id), q, assigned })
+    api.get<Board>(`/api/crm?${p}`).then(setBoard).catch(() => {})
+  }, [account, q, assigned])
+  useEffect(() => { const timer = setTimeout(load, 200); return () => clearTimeout(timer) }, [load])
 
   if (!account) return <Onboarding />
   if (!board) return <Spinner />
@@ -201,7 +213,22 @@ export default function Crm() {
           <Button variant="secondary" onClick={() => setSettings(true)}><Settings2 className="h-4 w-4" />{t('crm.settings')}</Button>
         </div>} />
 
-      {board.cards.length === 0 && (
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row">
+        <div className="relative sm:w-72">
+          <Search className="absolute left-3.5 top-3 h-4 w-4 text-ink-4" />
+          <input className="input pl-10" value={q} placeholder={t('ct.search')} onChange={e => setQ(e.target.value)} />
+        </div>
+        {board.team.length > 1 && (
+          <select className="input sm:w-56" value={assigned} onChange={e => setParams(e.target.value ? { assigned: e.target.value } : {}, { replace: true })}>
+            <option value="">{t('crm.all_people')}</option>
+            <option value="me">{t('crm.mine')}</option>
+            <option value="none">{t('crm.unassigned')}</option>
+            {board.team.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        )}
+      </div>
+
+      {board.cards.length === 0 && !q && !assigned && (
         <div className="mb-4 rounded-2xl border border-dashed border-line bg-white px-4 py-3 text-[13.5px] text-ink-3">{t('crm.add_hint')}</div>
       )}
 
@@ -222,7 +249,10 @@ export default function Crm() {
                 {cards.map(c => (
                   <div key={c.id} draggable onDragStart={e => { e.dataTransfer.setData('text/contact', String(c.id)); e.dataTransfer.effectAllowed = 'move' }}
                     onClick={() => setOpen(c.id)}
-                    className="cursor-grab rounded-xl border border-line bg-white p-3 shadow-card transition hover:-translate-y-px hover:shadow-pop active:cursor-grabbing">
+                    className="group relative cursor-grab rounded-xl border border-line bg-white p-3 shadow-card transition hover:-translate-y-px hover:shadow-pop active:cursor-grabbing">
+                    {s.type === 'open' && Date.now() - new Date(c.last_message_at || c.last_seen_at).getTime() > 3 * 86400000 && (
+                      <span title={t('crm.stale')} className="absolute -left-1 -top-1 h-3 w-3 rounded-full border-2 border-white bg-amber-500" />
+                    )}
                     <div className="flex items-center gap-2.5">
                       <Avatar name={c.username || c.name} size={28} />
                       <div className="min-w-0 flex-1">
@@ -232,10 +262,21 @@ export default function Crm() {
                       {c.deal_value > 0 && <span className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[12px] font-bold tabular-nums text-emerald-700">{fmtNum(c.deal_value)}</span>}
                     </div>
                     {c.last_message_preview && <p className="mt-2 line-clamp-2 text-[12.5px] text-ink-3">{c.last_message_preview}</p>}
+                    {c.next_reminder && (
+                      <div className={`mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${new Date(c.next_reminder).getTime() < Date.now() ? 'bg-brand-50 text-brand-700' : 'bg-amber-50 text-amber-700'}`}>
+                        <AlarmClock className="h-3 w-3" />{new Date(c.next_reminder).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    )}
                     <div className="mt-2 flex items-center gap-1.5">
+                      {c.assignee && <span title={c.assignee} className="grid h-5 w-5 place-items-center rounded-full bg-ink text-[10px] font-bold text-white">{c.assignee.charAt(0).toUpperCase()}</span>}
                       {c.tags.slice(0, 2).map(tg => <span key={tg} className="chip bg-brand-50 py-0 text-[11px] text-brand-700">{tg}</span>)}
                       {c.notes > 0 && <span className="flex items-center gap-0.5 text-[11.5px] text-amber-600"><StickyNote className="h-3 w-3" />{c.notes}</span>}
-                      <span className="ml-auto text-[11px] text-ink-4">{ago(c.last_message_at || c.last_seen_at)}</span>
+                      <span className="ml-auto text-[11px] text-ink-4 group-hover:hidden">{ago(c.last_message_at || c.last_seen_at)}</span>
+                      <span className="ml-auto hidden gap-1 group-hover:flex">
+                        {c.fields.phone && <a href={`tel:${c.fields.phone.replace(/[^\d+]/g, '')}`} onClick={e => e.stopPropagation()} title={c.fields.phone}
+                          className="grid h-6 w-6 place-items-center rounded-md bg-emerald-50 text-emerald-700 hover:bg-emerald-100"><Phone className="h-3.5 w-3.5" /></a>}
+                        <Link to={`/app/inbox?c=${c.id}`} onClick={e => e.stopPropagation()} className="grid h-6 w-6 place-items-center rounded-md bg-soft text-ink-2 hover:bg-[#ebebef]"><MessageCircle className="h-3.5 w-3.5" /></Link>
+                      </span>
                     </div>
                   </div>
                 ))}

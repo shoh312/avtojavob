@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowRight, Instagram, MessageSquareText, Play, Users, Workflow } from 'lucide-react'
+import { AlarmClock, ArrowRight, Instagram, MessageSquareText, Play, UserCheck, Users, Workflow } from 'lucide-react'
 import { api, type FlowSummary, type SeriesPoint, type Stats } from '../api'
 import { AreaChart, BarChart, ChartCard, HBars, fmtNum } from '../components/charts'
 import { useAuth } from '../auth'
 import { useI18n, useTimeAgo } from '../i18n'
 import { TemplateCard, useCreateFlow, useTemplates } from '../components/NewFlowModal'
 import { TRIGGER_META } from '../editor/meta'
+import OnboardingChecklist from '../components/Onboarding'
 
 function StatCard({ icon: Icon, label, value, sub }: { icon: typeof Users; label: string; value: number | string; sub?: string }) {
   return (
@@ -42,6 +43,43 @@ export function Onboarding() {
   )
 }
 
+/** Menejer (va egasi) uchun: menga biriktirilgan mijozlar va yaqin eslatmalar. */
+function MyWork({ accountId }: { accountId: number }) {
+  const { t } = useI18n()
+  const [d, setD] = useState<{ items: { id: number; text: string; remind_at: string; contact_id: number; contact: string }[]; my_leads: number } | null>(null)
+  useEffect(() => { api.get<typeof d>(`/api/reminders?account_id=${accountId}`).then(setD).catch(() => {}) }, [accountId])
+  if (!d || (!d.items.length && !d.my_leads)) return null
+  const now = Date.now()
+  return (
+    <section className="grid gap-4 lg:grid-cols-[260px_1fr]">
+      <Link to="/app/crm?assigned=me" className="card flex flex-col justify-between p-5 hover:shadow-pop">
+        <div className="flex items-center gap-2 text-[13px] font-medium text-ink-3"><UserCheck className="h-4 w-4" />{t('home.my_leads')}</div>
+        <div className="mt-3 text-[30px] font-extrabold tabular-nums tracking-tight">{d.my_leads}</div>
+        <div className="text-[12.5px] font-semibold text-brand-600">{t('home.open_crm')} →</div>
+      </Link>
+      <div className="card p-5">
+        <div className="mb-3 flex items-center gap-2 text-[13px] font-medium text-ink-3"><AlarmClock className="h-4 w-4" />{t('home.reminders')}</div>
+        {d.items.length === 0 ? <p className="text-[13px] text-ink-4">{t('home.no_reminders')}</p> : (
+          <div className="divide-y divide-line">
+            {d.items.slice(0, 5).map(r => {
+              const late = new Date(r.remind_at).getTime() < now
+              return (
+                <Link key={r.id} to={`/app/inbox?c=${r.contact_id}`} className="flex items-center gap-3 py-2 text-[13.5px] hover:text-brand-700">
+                  <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11.5px] font-semibold tabular-nums ${late ? 'bg-brand-50 text-brand-700' : 'bg-amber-50 text-amber-700'}`}>
+                    {new Date(r.remind_at).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{r.text}</span>
+                  <span className="shrink-0 text-[12px] text-ink-3">{r.contact}</span>
+                </Link>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 export default function Home() {
   const { t } = useI18n()
   const ago = useTimeAgo()
@@ -67,8 +105,11 @@ export default function Home() {
         <p className="mt-1 text-[14.5px] text-ink-3">{t('home.sub')}</p>
       </div>
 
+      {account && <OnboardingChecklist />}
+
       {!account ? <Onboarding /> : (
         <>
+          <MyWork accountId={account.id} />
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
             <StatCard icon={MessageSquareText} label={t('home.stat.sent')} value={stats?.sent_24h ?? '—'} />
             <StatCard icon={Users} label={t('home.stat.contacts')} value={stats?.contacts ?? '—'}

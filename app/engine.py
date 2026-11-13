@@ -177,8 +177,9 @@ def capture_lead(db: Session, account: IGAccount, contact: Contact, text: str) -
     return True
 
 
-def notify_telegram(db: Session, account: IGAccount, text: str, contact: Contact | None = None) -> None:
-    tgbot.notify(db, account, text, contact)
+def notify_telegram(db: Session, account: IGAccount, text: str, contact: Contact | None = None,
+                    user_id: int | None = None) -> None:
+    tgbot.notify(db, account, text, contact, user_id)
 
 
 def fill(template: str, contact: Contact) -> str:
@@ -824,8 +825,9 @@ def run_due_reminders() -> int:
             n.reminded = True
             db.commit()
             contact = db.get(Contact, n.contact_id)
-            if contact and contact.account.tg_chat_id:
-                notify_telegram(db, contact.account, contact_card(contact, f"{tgbot.t(contact.account, 'reminder')}: {n.text}"), contact)
+            if contact and contact.account.tg_bot_token_enc:
+                notify_telegram(db, contact.account, contact_card(contact, f"{tgbot.t(contact.account, 'reminder')}: {n.text}"),
+                                contact, user_id=n.created_by)
                 sent += 1
         return sent
     finally:

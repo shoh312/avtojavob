@@ -791,3 +791,139 @@ def test_product_catalog(client, monkeypatch):
     client.delete(f"/api/products/{p2['id']}", headers=H)
     assert len(client.get(f"/api/products?account_id={acc}").json()["items"]) == 1
     client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": False}, headers=H)
+
+
+def test_team_managers(client, monkeypatch):
+    from app import services, tgbot
+    from app.engine import run_due_reminders
+    from app.models import IGAccount
+    _login(client, "a@b.tj", "newpass123")
+    acc = S["acc"]
+    r = client.post("/api/team", json={"name": "Menejer Ali", "email": "ali@shop.tj"}, headers=H).json()
+    pw, mid = r["password"], r["id"]
+    assert len(pw) >= 8 and client.post("/api/team", json={"email": "ali@shop.tj"}, headers=H).json()["error"] == "email_taken"
+    with SessionLocal() as db:
+        a = db.get(IGAccount, acc)
+        a.tg_bot_username = "shop_bot"
+        db.commit()
+    team = client.get("/api/team").json()
+    link = team["members"][0]["telegram"][0]["link"]
+    assert link.startswith("https://t.me/shop_bot?start=m")
+
+    # menejer kiradi: egasining akkauntlarini ko'radi, lekin egaga tegishli amallar taqiqlangan
+    _login(client, "ali@shop.tj", pw)
+    me = client.get("/api/me").json()
+    assert me["user"]["role"] == "manager" and me["accounts"][0]["id"] == acc and me["user"]["plan"]["plan"] == "pro"
+    assert client.post(f"/api/accounts/{acc}/toggle", headers=H).status_code == 403
+    assert client.get("/api/team").status_code == 403
+    assert client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": True}, headers=H).status_code == 403
+    assert client.get(f"/api/crm?account_id={acc}").status_code == 200
+
+    # menejer o'z Telegram'ini ulaydi (/start havola orqali)
+    sent = []
+    monkeypatch.setattr(services, "_tg", lambda token, method, **p: sent.append((method, p)) or {"message_id": 500 + len(sent)})
+    with SessionLocal() as db:
+        a = db.get(IGAccount, acc)
+        a.tg_secret = "s3cret"
+        db.commit()
+    token = link.split("start=")[1]
+    client.post(f"/tg/{acc}", json={"message": {"message_id": 1, "chat": {"id": 4242}, "text": f"/start {token}"}},
+                headers={"X-Telegram-Bot-Api-Secret-Token": "s3cret"})
+    assert "Ulandingiz" in sent[-1][1]["text"]
+    client.post(f"/tg/{acc}", json={"message": {"message_id": 2, "chat": {"id": 5555}, "text": f"/start m{mid}_bad"}},
+                headers={"X-Telegram-Bot-Api-Secret-Token": "s3cret"})
+    assert client.get("/api/team").status_code == 403  # menejer hali ham menejer
+
+    # egasi mijozni menejerga biriktiradi -> menejer chatiga xabar
+    _login(client, "a@b.tj", "newpass123")
+    board = client.get(f"/api/crm?account_id={acc}").json()
+    assert {t["role"] for t in board["team"]} == {"owner", "manager"}
+    cid = board["cards"][0]["id"]
+    sent.clear()
+    r = client.patch(f"/api/contacts/{cid}", json={"assigned_to": mid}, headers=H).json()
+    assert r["assigned_to"] == mid and r["assignee"] == "Menejer Ali"
+    assert sent and sent[-1][1]["chat_id"] == "4242"
+    assert client.patch(f"/api/contacts/{cid}", json={"assigned_to": 999999}, headers=H).json()["error"] == "bad_member"
+    assert client.get(f"/api/crm?account_id={acc}&assigned={mid}").json()["cards"][0]["id"] == cid
+
+    # menejer eslatmasi o'zining Telegram'iga keladi
+    _login(client, "ali@shop.tj", pw)
+    assert client.get(f"/api/crm?account_id={acc}&assigned=me").json()["cards"][0]["id"] == cid
+    when = (utcnow() - timedelta(minutes=1)).isoformat() + "Z"
+    client.post(f"/api/contacts/{cid}/notes", json={"text": "Ali: qo'ng'iroq", "remind_at": when}, headers=H)
+    assert client.get(f"/api/reminders?account_id={acc}").json()["items"][0]["text"] == "Ali: qo'ng'iroq"
+    sent.clear()
+    run_due_reminders()
+    assert sent[-1][1]["chat_id"] == "4242" and "Ali: qo'ng'iroq" in sent[-1][1]["text"]
+
+    # menejer Telegram'da Reply qila oladi
+    tg_msg = sent[-1]
+    with SessionLocal() as db:
+        from app.models import TgLink
+        link_row = db.query(TgLink).filter_by(chat_id="4242").order_by(TgLink.id.desc()).first()
+        c = db.get(Contact, cid)
+        c.last_inbound_at = utcnow()
+        db.commit()
+        msg_id = link_row.tg_message_id
+    calls.clear()
+    client.post(f"/tg/{acc}", json={"message": {"message_id": 3, "chat": {"id": 4242}, "text": "Salom, Ali menejer",
+                                                "reply_to_message": {"message_id": msg_id}}},
+                headers={"X-Telegram-Bot-Api-Secret-Token": "s3cret"})
+    assert calls and calls[-1][2] == {"text": "Salom, Ali menejer"}
+    del tg_msg
+
+    # avtomatik taqsimlash
+    _login(client, "a@b.tj", "newpass123")
+    client.put("/api/team/settings", json={"auto_assign": True}, headers=H)
+    with SessionLocal() as db:
+        from app import crm as crm_mod
+        newc = Contact(account_id=acc, igsid="auto-1", username="newlead")
+        db.add(newc)
+        db.commit()
+        crm_mod.set_stage(db, newc, crm_mod.get_stages(newc.account)[0]["id"], "test")
+        assert newc.assigned_to == mid
+    client.put("/api/team/settings", json={"auto_assign": False}, headers=H)
+
+    ob = client.get(f"/api/onboarding?account_id={acc}").json()
+    assert ob["steps"]["instagram"] and ob["steps"]["team"] and ob["steps"]["products"] and ob["total"] == 6
+
+    # menejerni o'chirish — mijozlari biriktirilmagan holatga o'tadi
+    client.delete(f"/api/team/{mid}", headers=H)
+    assert client.get(f"/api/crm?account_id={acc}&assigned=none").json()["cards"]
+
+
+def test_ai_generate_flow(client, monkeypatch):
+    from app import services
+    acc = S["acc"]
+    monkeypatch.setattr(services, "ai_available", lambda db: True)
+    seen = {}
+    ai_json = {"name": "Narx + telefon", "nodes": [
+        {"id": "t", "type": "trigger", "data": {"kind": "comment", "keywords": "narx, price", "match": "contains"}},
+        {"id": "m", "type": "message", "data": {"text": "Salom! Narxni bilish uchun bosing", "buttons": [{"id": "go", "title": "Narxni bilish", "kind": "flow"}]}},
+        {"id": "q", "type": "question", "data": {"text": "Telefoningiz?", "field": "phone", "validate": "phone"}},
+        {"id": "a", "type": "action", "data": {"op": "set_stage", "stage": "nonexistent"}},
+        {"id": "x", "type": "unknown"}],
+        "edges": [{"source": "t", "target": "m", "sourceHandle": "out"},
+                  {"source": "m", "target": "q", "sourceHandle": "out"},  # noto'g'ri: tugmali xabarda 'out' yo'q
+                  {"source": "m", "target": "q", "sourceHandle": "btn:go"},
+                  {"source": "q", "target": "a"}, {"source": "a", "target": "t"}]}
+
+    def fake_complete(db, system, text, json_mode=False, max_tokens=8000):
+        seen.update(system=system, text=text, json_mode=json_mode)
+        return "```json\n" + json.dumps(ai_json) + "\n```", None
+    monkeypatch.setattr(services, "ai_complete", fake_complete)
+    r = client.post("/api/flows/generate", json={"account_id": acc, "prompt": "Izohga narx yozganlardan telefon ol"}, headers=H).json()
+    assert r["name"] == "Narx + telefon" and r["active"] is False and r["nodes"] == 4
+    assert seen["json_mode"] and "Uzbek" in seen["system"] and "CRM stage ids" in seen["system"]
+    flow = client.get(f"/api/flows/{r['id']}").json()
+    g = flow["graph"]
+    assert [n["type"] for n in g["nodes"]] == ["trigger", "message", "question", "action"]
+    assert len(g["edges"]) == 3 and {e["sourceHandle"] for e in g["edges"]} == {"out", "btn:go"}
+    xs = [n["position"]["x"] for n in g["nodes"]]
+    assert xs == sorted(xs) and xs[-1] > 0
+    stage = next(n for n in g["nodes"] if n["type"] == "action")["data"]["stage"]
+    assert stage and stage != "nonexistent"
+    assert flow["errors"] == []
+
+    monkeypatch.setattr(services, "ai_complete", lambda *a, **k: ("bu json emas", None))
+    assert client.post("/api/flows/generate", json={"account_id": acc, "prompt": "biror narsa"}, headers=H).json()["error"] == "ai_failed"
