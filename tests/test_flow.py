@@ -1279,3 +1279,22 @@ def test_accounts_overview(client):
     assert d["used"] == len(d["items"]) >= 1 and d["limit"] >= 1
     a = d["items"][0]
     assert {"contacts", "flows_active", "sent_7d", "inbound_7d", "last_event_at", "token_days", "ai", "telegram"} <= set(a)
+
+
+def test_products_stats_and_reorder(client):
+    acc = S["acc"]
+    a = client.post("/api/products", json={"account_id": acc, "name": "Alfa", "price": "10"}, headers=H).json()
+    b = client.post("/api/products", json={"account_id": acc, "name": "Beta", "price": "20"}, headers=H).json()
+    from app.engine import log_event
+    from app.models import IGAccount
+    with SessionLocal() as db:
+        ac = db.get(IGAccount, acc)
+        log_event(db, ac, None, "ai_reply", "narx?", "Mana  🛍 Alfa, Beta")
+        log_event(db, ac, None, "click", "[🛒 Alfa]", "Alfa")
+    items = {p["name"]: p for p in client.get(f"/api/products?account_id={acc}").json()["items"]}
+    assert items["Alfa"]["shown_30d"] >= 1 and items["Alfa"]["orders_30d"] >= 1 and items["Beta"]["shown_30d"] >= 1
+    assert client.post("/api/products/reorder", json={"account_id": acc, "ids": [b["id"], a["id"]]}, headers=H).json()["ok"]
+    names = [p["name"] for p in client.get(f"/api/products?account_id={acc}").json()["items"]]
+    assert names.index("Beta") < names.index("Alfa")
+    client.delete(f"/api/products/{a['id']}", headers=H)
+    client.delete(f"/api/products/{b['id']}", headers=H)

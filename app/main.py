@@ -1525,7 +1525,33 @@ def _apply_product(p: Product, body: dict) -> None:
 def products_list(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
     rows = db.scalars(select(Product).where(Product.account_id == acc.id).order_by(Product.sort, Product.id)).all()
-    return {"items": [_product_json(p) for p in rows]}
+    # 30 kunlik statistika: AI kartochkani necha marta yubordi, necha marta "Buyurtma" bosildi
+    since = utcnow() - timedelta(days=30)
+    events = db.execute(select(EventLog.kind, EventLog.incoming, EventLog.detail).where(
+        EventLog.account_id == acc.id, EventLog.created_at >= since,
+        EventLog.kind.in_(("ai_reply", "click"))).order_by(EventLog.id.desc()).limit(5000)).all()
+    shown: Counter = Counter()
+    orders: Counter = Counter()
+    for kind, incoming, detail in events:
+        if kind == "click" and (incoming or "").startswith("[🛒 "):
+            orders[(detail or "").strip()] += 1
+        elif kind == "ai_reply" and "🛍 " in (detail or ""):
+            for name in (detail or "").rsplit("🛍 ", 1)[1].split(", "):
+                shown[name.strip()] += 1
+    return {"items": [{**_product_json(p), "shown_30d": shown.get(p.name, 0), "orders_30d": orders.get(p.name, 0)}
+                      for p in rows]}
+
+
+@app.post("/api/products/reorder")
+def products_reorder(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, int(body.get("account_id") or 0))
+    ids = [int(x) for x in (body.get("ids") or []) if str(x).isdigit()]
+    rows = {p.id: p for p in db.scalars(select(Product).where(Product.account_id == acc.id))}
+    for i, pid in enumerate(ids):
+        if pid in rows:
+            rows[pid].sort = i
+    db.commit()
+    return {"ok": True}
 
 
 @app.post("/api/products")
