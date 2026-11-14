@@ -153,6 +153,8 @@ class Contact(Base):
     # Instagram 24 soat qoidasi: shu vaqtdan keyin 24 soat ichida xabar yuborish mumkin
     last_inbound_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     profile_checked: Mapped[bool] = mapped_column(Boolean, default=False)
+    avatar: Mapped[str] = mapped_column(String(120), default="")  # Instagram profil rasmi (uploads/ ichida saqlangan)
+    avatar_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # oxirgi tekshiruv
     # Jonli chat
     bot_paused_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     unread: Mapped[int] = mapped_column(Integer, default=0)

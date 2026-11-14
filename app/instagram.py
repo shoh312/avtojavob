@@ -211,9 +211,30 @@ def conversation_history(token: str, igsid: str, limit: int = 40) -> list[dict]:
     return sorted(out, key=lambda x: x["created_at"])
 
 
+IMAGE_HOSTS = ("fbcdn.net", "cdninstagram.com", "fbsbx.com")
+
+
+def fetch_image(url: str, limit: int = 2 * 1024 * 1024) -> bytes | None:
+    """Instagram CDN'dagi rasmni yuklab olish (faqat rasmiy hostlar, 2 MB gacha)."""
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    if not url.startswith("https://") or not any(host == h or host.endswith("." + h) for h in IMAGE_HOSTS):
+        return None
+    try:
+        r = _client.get(url, follow_redirects=True)
+    except httpx.HTTPError:
+        return None
+    data = r.content
+    if r.status_code != 200 or len(data) > limit:
+        return None
+    if not (data.startswith(b"\xff\xd8") or data.startswith(b"\x89PNG") or data[8:12] == b"WEBP"):
+        return None
+    return data
+
+
 def get_user_profile(token: str, igsid: str) -> dict:
     """Xabar yozgan foydalanuvchi haqida: username va bizga obuna bo'lganmi."""
     return _json(_client.get(_graph(igsid), params={
-        "fields": "username,is_user_follow_business",
+        "fields": "name,username,profile_pic,is_user_follow_business",
         "access_token": token,
     }))

@@ -45,7 +45,7 @@ export function ContactPanel({ id, onClose, onChanged }: { id: number; onClose: 
   }
   const c = d?.contact
   return (
-    <Modal open onClose={onClose} wide title={c ? <span className="flex items-center gap-3"><Avatar name={c.username || c.name} size={36} />{c.username ? `@${c.username}` : c.name || c.igsid}</span> : '…'}>
+    <Modal open onClose={onClose} wide title={c ? <span className="flex items-center gap-3"><Avatar name={c.username || c.name} src={c.avatar_url || null} size={36} />{c.username ? `@${c.username}` : c.name || c.igsid}</span> : '…'}>
       {!d || !c ? <Spinner className="py-12" /> : (
         <div className="grid gap-6 md:grid-cols-[280px_1fr]">
           <div className="space-y-4">
@@ -250,7 +250,7 @@ export function Board({ onChanged }: { onChanged?: () => void }) {
                       <span title={t('crm.stale')} className="absolute -left-1 -top-1 h-3 w-3 rounded-full border-2 border-white bg-amber-500" />
                     )}
                     <div className="flex items-center gap-2.5">
-                      <Avatar name={c.username || c.name} size={28} />
+                      <Avatar name={c.username || c.name} src={c.avatar_url || null} size={28} />
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-[13.5px] font-semibold">{c.username ? `@${c.username}` : c.name || c.igsid}</div>
                         {c.fields.phone && <div className="flex items-center gap-1 truncate font-mono text-[11.5px] text-ink-3"><Phone className="h-3 w-3" />{c.fields.phone}</div>}

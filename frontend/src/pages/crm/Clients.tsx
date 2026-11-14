@@ -168,7 +168,7 @@ export default function Clients({ list, onList, summary, onChanged }: {
                 className="grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 border-b border-line/70 px-5 py-3.5 transition last:border-0 hover:bg-[#fafafb] md:grid-cols-[minmax(0,2.2fr)_minmax(0,1.3fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_56px]">
                 <div className="flex min-w-0 items-center gap-3">
                   <span className="relative">
-                    <Avatar name={title} size={40} />
+                    <Avatar name={title} src={c.avatar_url || null} size={40} />
                     {c.unread > 0 && <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-white bg-sky-500" />}
                   </span>
                   <div className="min-w-0">

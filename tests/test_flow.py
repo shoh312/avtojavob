@@ -1311,3 +1311,28 @@ def test_inbox_tabs_and_quick_replies(client):
         {"title": "Narx", "text": "Narxlar katalogda"}, {"title": "", "text": "Salom!"}, {"title": "bo'sh", "text": ""}]}, headers=H).json()
     assert [x["title"] for x in r["items"]] == ["Narx", "Salom!"]
     assert client.get(f"/api/accounts/{acc}/quick-replies").json()["items"][0]["text"] == "Narxlar katalogda"
+
+
+def test_contact_avatars(client, monkeypatch):
+    from app import engine
+    from app import instagram as ig_mod
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 50
+    assert ig_mod.fetch_image("https://evil.example.com/a.png") is None
+    assert ig_mod.fetch_image("http://scontent.cdninstagram.com/a.png") is None
+    monkeypatch.setattr(ig_mod, "get_user_profile", lambda t, igsid: {
+        "username": "rasmli", "name": "Rasmli Mijoz", "profile_pic": "https://scontent.cdninstagram.com/p.jpg"})
+    monkeypatch.setattr(ig_mod, "fetch_image", lambda url: png)
+    engine._avatar_runs.clear()
+    with SessionLocal() as db:
+        c = engine.get_contact(db, db.get(IGAccount, S["acc"]), "avatar-user")
+        c.last_message_at = utcnow()
+        c.avatar_at = None
+        db.commit()
+        cid = c.id
+    assert engine.refresh_avatars(S["acc"]) >= 1
+    assert engine.refresh_avatars(S["acc"]) == 0  # 60 soniyada bir marta
+    with SessionLocal() as db:
+        c = db.get(Contact, cid)
+        assert c.avatar.endswith(".png") and c.name == "Rasmli Mijoz"
+    url = client.get(f"/api/inbox/{cid}").json()["contact"]["avatar_url"]
+    assert url.startswith("/uploads/c") and client.get(url).status_code == 200

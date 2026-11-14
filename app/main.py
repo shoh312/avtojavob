@@ -30,6 +30,7 @@ from .config import settings
 from .db import get_db, init_db
 from .engine import contact_card as engine_contact_card
 from .engine import sync_history as engine_sync_history
+from .engine import refresh_avatars as engine_refresh_avatars
 from .engine import broadcast_window
 from .engine import (broadcast_audience, log_event, process_payload, record_message, refresh_expiring_tokens,
                      resubscribe_all, run_broadcast, run_due_jobs, run_due_reminders)
@@ -218,7 +219,8 @@ def contact_json(c: Contact) -> dict:
             "created_at": iso(c.created_at), "stage": c.stage, "deal_value": c.deal_value or 0,
             "last_message_preview": c.last_message_preview, "last_message_at": iso(c.last_message_at),
             "assigned_to": c.assigned_to, "assignee": (c.assignee.name or c.assignee.email) if c.assignee else None,
-            "manual": c.igsid.startswith("manual:"), "unread": c.unread or 0}
+            "manual": c.igsid.startswith("manual:"), "unread": c.unread or 0,
+            "avatar_url": f"/uploads/{c.avatar}" if c.avatar else ""}
 
 
 def detect_lang(request: Request) -> str:
@@ -1347,9 +1349,10 @@ def _inbox_filter(stmt, tab: str, user: User):
 
 
 @app.get("/api/inbox")
-def inbox_list(account_id: int, q: str = "", tab: str = "all", user: User = Depends(current_user),
-               db: Session = Depends(get_db)):
+def inbox_list(account_id: int, background: BackgroundTasks, q: str = "", tab: str = "all",
+               user: User = Depends(current_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
+    background.add_task(engine_refresh_avatars, acc.id)
     base = select(Contact).where(Contact.account_id == acc.id, Contact.last_message_at.is_not(None))
     if q.strip():
         like = f"%{q.strip().lower()}%"

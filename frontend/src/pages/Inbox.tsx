@@ -87,7 +87,7 @@ function InfoPanel({ c, stages, onOpenCard, onClose }: { c: Conv; stages: Stage[
       <div className="flex justify-end p-2"><button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-ink-4 hover:bg-soft hover:text-ink"><PanelRightClose className="h-4 w-4" /></button></div>
       <div className="scrollbar-thin flex-1 overflow-y-auto px-5 pb-5">
         <div className="flex flex-col items-center text-center">
-          <Avatar name={c.username || c.name || '?'} size={72} />
+          <Avatar name={c.username || c.name || '?'} src={c.avatar_url || null} size={72} />
           <div className="mt-3 text-[16px] font-bold">{c.name || who(c)}</div>
           {c.username && c.name && <a href={`https://instagram.com/${c.username}`} target="_blank" rel="noreferrer" className="mt-0.5 inline-flex items-center gap-1 text-[12.5px] text-ink-3 hover:text-ink">@{c.username}<ExternalLink className="h-3 w-3" /></a>}
           <div className="mt-3 flex flex-wrap justify-center gap-1.5">
@@ -222,7 +222,7 @@ function Thread({ id, stages, onBack, onChanged }: { id: number; stages: Stage[]
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center gap-3 border-b border-line bg-white px-4 py-2.5">
           <button onClick={onBack} className="rounded-lg p-1.5 text-ink-3 hover:bg-soft md:hidden"><ArrowLeft className="h-5 w-5" /></button>
-          <button onClick={() => setCard(true)} className="shrink-0"><Avatar name={c.username || c.name || '?'} size={40} /></button>
+          <button onClick={() => setCard(true)} className="shrink-0"><Avatar name={c.username || c.name || '?'} src={c.avatar_url || null} size={40} /></button>
           <div className="min-w-0 flex-1">
             <button onClick={() => setCard(true)} className="block max-w-full truncate text-left text-[15px] font-bold hover:underline">{c.name || who(c)}</button>
             <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11.5px]">
@@ -383,7 +383,7 @@ export default function Inbox() {
               <button key={c.id} onClick={() => pick(c.id)}
                 className={`mb-0.5 flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition ${active ? 'bg-ink text-white' : 'hover:bg-soft'}`}>
                 <span className={`relative shrink-0 rounded-full p-[2px] ${c.unread && !active ? 'bg-gradient-to-br from-[#f58529] via-[#dd2a7b] to-[#8134af]' : ''}`}>
-                  <span className="block rounded-full bg-white"><Avatar name={c.username || c.name || '?'} size={42} /></span>
+                  <span className="block rounded-full bg-white"><Avatar name={c.username || c.name || '?'} src={c.avatar_url || null} size={42} /></span>
                   {c.bot_paused && <span className="absolute -bottom-0.5 -right-0.5 grid h-5 w-5 place-items-center rounded-full bg-amber-400 text-white ring-2 ring-white"><Hand className="h-2.5 w-2.5" /></span>}
                 </span>
                 <span className="min-w-0 flex-1">

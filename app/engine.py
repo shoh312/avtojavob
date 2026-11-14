@@ -580,18 +580,78 @@ def handle_postback(db: Session, account: IGAccount, contact: Contact, payload: 
     run_from(ctx, ctx.graph.next(node_id, f"btn:{btn_id}"))
 
 
+AVATAR_TTL = timedelta(days=7)
+
+
+def save_contact_avatar(contact: Contact, url: str | None) -> None:
+    """Profil rasmini uploads/ ga saqlaydi (Instagram havolalari bir necha kunda eskiradi)."""
+    import secrets as _secrets
+    from pathlib import Path
+    contact.avatar_at = utcnow()
+    data = ig.fetch_image(url) if url else None
+    if not data:
+        return
+    ext = ".png" if data.startswith(b"\x89PNG") else ".webp" if data[8:12] == b"WEBP" else ".jpg"
+    folder = Path(settings.UPLOAD_DIR)
+    folder.mkdir(parents=True, exist_ok=True)
+    name = f"c{contact.id}-{_secrets.token_hex(6)}{ext}"
+    (folder / name).write_bytes(data)
+    old = contact.avatar
+    contact.avatar = name
+    if old and old != name:
+        (folder / old).unlink(missing_ok=True)
+
+
+def apply_profile(contact: Contact, profile: dict) -> None:
+    contact.username = (profile.get("username") or contact.username or "")[:120]
+    if profile.get("name") and not contact.name:
+        contact.name = str(profile["name"])[:120]
+    if profile.get("is_user_follow_business") is not None:
+        contact.follows = bool(profile.get("is_user_follow_business"))
+    save_contact_avatar(contact, profile.get("profile_pic"))
+
+
 def ensure_profile(db: Session, account: IGAccount, contact: Contact) -> None:
     if contact.profile_checked:
         return
     contact.profile_checked = True
     try:
-        profile = ig.get_user_profile(decrypt(account.access_token_enc), contact.igsid)
-        contact.username = (profile.get("username") or contact.username or "")[:120]
-        if profile.get("is_user_follow_business") is not None:
-            contact.follows = bool(profile.get("is_user_follow_business"))
+        apply_profile(contact, ig.get_user_profile(decrypt(account.access_token_enc), contact.igsid))
     except Exception as e:  # noqa: BLE001
         log.info("profile @%s: %s", contact.igsid, e)
     db.commit()
+
+
+_avatar_runs: dict[int, float] = {}
+
+
+def refresh_avatars(account_id: int, limit: int = 12) -> int:
+    """Chatlar ochilganda: rasmi yo'q yoki eskirgan kontaktlarning profilini yangilash (fonda, oz-ozdan)."""
+    import time as _time
+    now_s = _time.monotonic()
+    if now_s - _avatar_runs.get(account_id, 0) < 60:
+        return 0
+    _avatar_runs[account_id] = now_s
+    done = 0
+    with SessionLocal() as db:
+        account = db.get(IGAccount, account_id)
+        if not account or not account.active:
+            return 0
+        token = decrypt(account.access_token_enc)
+        stale = utcnow() - AVATAR_TTL
+        rows = db.scalars(select(Contact).where(
+            Contact.account_id == account_id, Contact.last_message_at.is_not(None), ~Contact.igsid.like("manual:%"),
+            (Contact.avatar_at.is_(None)) | (Contact.avatar_at < stale))
+            .order_by(Contact.last_message_at.desc()).limit(limit)).all()
+        for c in rows:
+            try:
+                apply_profile(c, ig.get_user_profile(token, c.igsid))
+                done += 1
+            except Exception as e:  # noqa: BLE001
+                c.avatar_at = utcnow()  # xato bo'lsa ham keyinroq qayta urinamiz
+                log.info("avatar @%s: %s", c.igsid, e)
+            db.commit()
+    return done
 
 
 ECHO_WAIT_SECONDS = 2.0

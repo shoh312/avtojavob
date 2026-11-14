@@ -95,7 +95,7 @@ export function DuplicatesModal({ accountId, onClose, onChanged }: { accountId: 
                 <div className="mb-2 flex items-center gap-1.5 font-mono text-[13px] font-semibold"><Phone className="h-3.5 w-3.5 text-ink-4" />{g.phone}</div>
                 {g.items.map(c => (
                   <button key={c.id} onClick={() => setOpen(c.id)} className="flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-soft">
-                    <Avatar name={c.name || c.username || '?'} size={28} />
+                    <Avatar name={c.name || c.username || '?'} src={c.avatar_url || null} size={28} />
                     <span className="truncate text-[13.5px] font-medium">{c.name || `@${c.username}`}</span>
                     {c.username && c.name && <span className="truncate text-[12px] text-ink-3">@{c.username}</span>}
                   </button>
