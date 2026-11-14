@@ -187,10 +187,15 @@ def iso(dt) -> str | None:
     return dt.isoformat() + "Z" if dt else None
 
 
+def avatar_url(u: User) -> str:
+    return f"/uploads/{u.avatar}" if u.avatar else ""
+
+
 def user_json(u: User) -> dict:
     return {"id": u.id, "email": u.email, "name": u.name, "lang": u.lang, "is_admin": u.is_admin,
             "plan": plan_json(u.workspace), "email_verified": u.email_verified,
-            "role": "manager" if u.is_manager else "owner"}
+            "role": "manager" if u.is_manager else "owner", "avatar_url": avatar_url(u),
+            "google": bool(u.google_sub), "created_at": iso(u.created_at)}
 
 
 def account_json(a: IGAccount) -> dict:
@@ -293,6 +298,15 @@ def update_me(body: dict = Body(...), user: User = Depends(current_user), db: Se
         user.name = str(body["name"] or "").strip()[:120]
     if body.get("lang") in LANGS:
         user.lang = body["lang"]
+    if "avatar" in body:
+        new = str(body["avatar"] or "").strip()
+        # faqat shu foydalanuvchi yuklagan rasm
+        if new and (not new.startswith(f"{user.id}-") or "/" in new or "\\" in new or not (UPLOAD_DIR / new).is_file()):
+            err("bad_image")
+        old = user.avatar
+        user.avatar = new
+        if old and old != new:
+            (UPLOAD_DIR / old).unlink(missing_ok=True)
     if body.get("new_password"):
         if not verify_password(str(body.get("password") or ""), user.password_hash):
             err("password_wrong")
@@ -1553,7 +1567,7 @@ def _member_json(db: Session, owner: User, u: User) -> dict:
             link = f"https://t.me/{acc.tg_bot_username}?start={tgbot.start_token(u.id, acc.id)}" if acc.tg_bot_username else ""
             links.append({"account_id": acc.id, "username": acc.username, "linked": linked, "link": link})
     assigned = db.scalar(select(func.count(Contact.id)).where(Contact.assigned_to == u.id)) or 0
-    return {"id": u.id, "name": u.name, "email": u.email, "created_at": iso(u.created_at),
+    return {"id": u.id, "name": u.name, "email": u.email, "avatar_url": avatar_url(u), "created_at": iso(u.created_at),
             "last_login_at": iso(u.last_login_at), "assigned": assigned, "telegram": links}
 
 

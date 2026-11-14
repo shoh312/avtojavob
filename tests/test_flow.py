@@ -1250,3 +1250,17 @@ def test_sales_helpers_and_echo_twin(client):
     with SessionLocal() as db:
         rows = db.query(Message).filter_by(contact_id=cid).all()
         assert [(m.source, m.ext_id != "") for m in rows] == [("ai", True)]
+
+
+def test_profile_avatar(client):
+    me = client.get("/api/me").json()["user"]
+    assert me["avatar_url"] == "" and "google" in me and me["created_at"]
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 100
+    up = client.post("/api/uploads", files={"file": ("a.png", png, "image/png")}, headers=H).json()
+    u = client.patch("/api/me", json={"avatar": up["image"]}, headers=H).json()["user"]
+    assert u["avatar_url"] == f"/uploads/{up['image']}"
+    assert client.get(u["avatar_url"]).status_code == 200
+    assert client.patch("/api/me", json={"avatar": "../app.db"}, headers=H).json()["error"] == "bad_image"
+    assert client.patch("/api/me", json={"avatar": "999999-x.png"}, headers=H).json()["error"] == "bad_image"
+    u = client.patch("/api/me", json={"avatar": ""}, headers=H).json()["user"]
+    assert u["avatar_url"] == "" and client.get(f"/uploads/{up['image']}").status_code == 404

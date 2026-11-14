@@ -5,7 +5,7 @@ import { api, ApiError } from '../api'
 import { useI18n, useTimeAgo, type TKey } from '../i18n'
 import { Avatar, Button, Empty, Modal, PageHeader, Spinner, Toggle, useToast } from '../components/ui'
 
-type Member = { id: number; name: string; email: string; last_login_at: string | null; assigned: number
+type Member = { id: number; name: string; email: string; avatar_url?: string; last_login_at: string | null; assigned: number
   telegram: { account_id: number; username: string; linked: boolean; link: string }[] }
 
 function AiLink() {
@@ -88,7 +88,7 @@ export default function Team() {
           {data.members.map(m => (
             <div key={m.id} className="card p-5">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-                <Avatar name={m.name || m.email} size={44} />
+                <Avatar name={m.name || m.email} src={m.avatar_url || null} size={44} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[15px] font-bold">{m.name || m.email}</div>
                   <div className="truncate text-[13px] text-ink-3">{m.email} · {t('adm.last_login')}: {ago(m.last_login_at)}</div>

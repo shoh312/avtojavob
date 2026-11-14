@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Activity, BarChart3, Blocks, KanbanSquare, ShoppingBag, Check, ChevronDown, ChevronsUpDown, UsersRound, CreditCard, Home, Inbox, Instagram, LogOut, MailWarning, Megaphone, Menu, Plus, Settings, SlidersHorizontal, UserCog, Workflow, X } from 'lucide-react'
 import { useAuth } from '../auth'
 import { useI18n, type TKey } from '../i18n'
@@ -156,7 +156,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       )}
       <div className="mt-auto border-t border-line pt-4">
         <div className="flex items-center gap-3 px-2">
-          <Avatar name={me?.user.name || me?.user.email || '?'} size={32} />
+          <Link to="/app/settings" className="shrink-0 rounded-full transition hover:opacity-80"><Avatar name={me?.user.name || me?.user.email || '?'} src={me?.user.avatar_url || null} size={32} /></Link>
           <div className="min-w-0 flex-1">
             <div className="truncate text-[13px] font-semibold">{me?.user.name || me?.user.email}</div>
             <div className="truncate text-[12px] text-ink-3">{me?.user.role === 'manager' ? t('team.role_manager') : me?.user.email}</div>

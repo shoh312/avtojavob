@@ -26,7 +26,7 @@ export const api = {
 // ---- turlar
 export type PlanKey = 'trial' | 'pro' | 'business'
 export type PlanInfo = { plan: PlanKey; active: boolean; expires_at: string; days_left: number; accounts_limit: number; unlimited: boolean }
-export type User = { id: number; email: string; name: string; lang: string; is_admin: boolean; plan: PlanInfo; email_verified: boolean; role: 'owner' | 'manager' }
+export type User = { id: number; email: string; name: string; lang: string; is_admin: boolean; plan: PlanInfo; email_verified: boolean; role: 'owner' | 'manager'; avatar_url?: string; google?: boolean; created_at?: string }
 export type Plans = { currency: string; trial_days: number; telegram: string; plans: { key: PlanKey; price: number; accounts: number }[]; current: PlanInfo }
 export type SeriesPoint = { date: string; value: number }
 export type AdminUser = User & {
