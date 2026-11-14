@@ -3,6 +3,7 @@
 import ipaddress
 import json
 import logging
+import re
 import smtplib
 import socket
 import ssl
@@ -206,6 +207,42 @@ links or repeat all details yourself.
 """
 
 
+_UZ_WORDS = {"salom", "assalomu", "narx", "narxi", "qancha", "bormi", "kerak", "rahmat", "nima", "qanday", "qachon",
+             "yozilmoqchiman", "kurs", "kursi", "bor", "yo'q", "ha", "siz", "men", "bilan", "uchun", "qayerda", "manzil"}
+_EN_WORDS = {"the", "is", "are", "how", "much", "price", "hello", "hi", "want", "what", "do", "you", "have", "can",
+             "where", "when", "please", "thanks", "course", "cost"}
+_TJ_WORDS = {"салом", "чанд", "нарх", "нархаш", "ман", "мехоҳам", "мехохам", "ҳаст", "хаст", "кадом", "дорам", "доред",
+             "чӣ", "чи", "аст", "рахмат", "раҳмат", "кай", "куҷо", "кучо"}
+
+
+def detect_lang(text: str) -> str | None:
+    """Mijoz xabari tili (AI'ga aniq ko'rsatish uchun). Aniqlab bo'lmasa — None."""
+    t = (text or "").lower()
+    letters = [ch for ch in t if ch.isalpha()]
+    if len(letters) < 2:
+        return None
+    cyr = sum(1 for ch in letters if "\u0400" <= ch <= "\u04ff")
+    words = set(re.findall(r"[\w']+", t.replace("\u2018", "'").replace("\u02bb", "'")))
+    if cyr * 2 >= len(letters):
+        if any(ch in t for ch in "ӣӯқғҳҷ") or words & _TJ_WORDS:
+            return "Tajik"
+        if "ў" in t:
+            return "Uzbek"
+        return "Russian"
+    if "o'" in t or "g'" in t or words & _UZ_WORDS:
+        return "Uzbek"
+    if words & _EN_WORDS:
+        return "English"
+    return None
+
+
+def language_hint(history: list[dict]) -> str:
+    last = next((h["content"] for h in reversed(history) if h.get("role") == "user"), "")
+    lang = detect_lang(last)
+    return (f"\n\nIMPORTANT: the customer's last message is in {lang}. Write your whole reply to the customer in {lang}."
+            if lang else "")
+
+
 def build_system(business_prompt: str, leads: str = "off", catalog: str = "") -> str:
     """leads: off | ask (telefon so'rash) | done (telefon allaqachon olingan)."""
     rules = {"ask": AI_LEADS, "done": AI_LEADS_DONE}.get(leads, AI_NO_LEADS)
@@ -223,7 +260,7 @@ def ai_generate(db: Session, business_prompt: str, history: list[dict], leads: s
     history = _clean_history(history)
     if not history:
         return None, "empty history"
-    system = build_system(business_prompt, leads, catalog)
+    system = build_system(business_prompt, leads, catalog) + language_hint(history)
     text, error = (_gemini if ai_provider(db) == "gemini" else _claude)(db, system, history)
     if error:
         log.warning("AI (%s): %s", ai_provider(db), error)

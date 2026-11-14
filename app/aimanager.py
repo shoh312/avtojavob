@@ -85,6 +85,7 @@ def _ask(db: Session, manager: User, account: IGAccount, contact: Contact | None
     current = crm.stage_by_id(account, contact.stage if contact is not None else stage_id)
     system = _system(manager, account, products, followup).replace("{current}", current["name"] if current else "none")
     history = list(history) if history is not None else _history(db, contact)
+    system += services.language_hint(history)
     if followup:
         history.append({"role": "user", "content": "[The customer has been silent. Write the follow-up now.]"})
     text, error = services.ai_chat_json(db, system, history)

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Check, ChevronDown, Loader2, X } from 'lucide-react'
 import { LANGS, useI18n, type Lang } from '../i18n'
 
@@ -35,25 +36,36 @@ export function Toggle({ checked, onChange, size = 'md' }: { checked: boolean; o
   )
 }
 
-export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title?: ReactNode; children: ReactNode; wide?: boolean }) {
+/** Oyna: body'ga portal orqali chiqadi (ota elementning rangi/transformi ta'sir qilmaydi). */
+export function Modal({ open, onClose, title, sub, icon, children, wide }: {
+  open: boolean; onClose: () => void; title?: ReactNode; sub?: ReactNode; icon?: ReactNode; children: ReactNode; wide?: boolean
+}) {
   useEffect(() => {
     if (!open) return
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { window.removeEventListener('keydown', h); document.body.style.overflow = prev }
   }, [open, onClose])
   if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/30 p-0 backdrop-blur-[2px] sm:items-center sm:p-4" onMouseDown={onClose}>
-      <div onMouseDown={e => e.stopPropagation()}
-        className={`animate-fade-up max-h-[92vh] w-full overflow-auto rounded-t-3xl bg-white p-6 shadow-pop sm:rounded-3xl ${wide ? 'sm:max-w-3xl' : 'sm:max-w-md'}`}>
-        <div className="mb-5 flex items-center justify-between gap-4">
-          <h3 className="text-[18px] font-bold tracking-tight">{title}</h3>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-ink-3 hover:bg-soft"><X className="h-5 w-5" /></button>
+  return createPortal(
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-[#0b0b10]/45 p-0 text-left text-ink backdrop-blur-[3px] animate-[fade-in_.2s_ease-out] sm:items-center sm:p-4" onMouseDown={onClose}>
+      <div role="dialog" aria-modal="true" onMouseDown={e => e.stopPropagation()}
+        className={`modal-pop flex max-h-[94vh] w-full flex-col overflow-hidden rounded-t-[28px] bg-white shadow-[0_40px_80px_-30px_rgba(10,10,20,.45)] ring-1 ring-black/5 sm:rounded-[28px] ${wide ? 'sm:max-w-3xl' : 'sm:max-w-md'}`}>
+        <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-[#e2e2e8] sm:hidden" />
+        <div className="flex shrink-0 items-start gap-3 px-6 pb-4 pt-5">
+          {icon && <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-brand-50 text-brand-600">{icon}</span>}
+          <div className="min-w-0 flex-1">
+            {title && <h3 className="text-[17px] font-bold leading-tight tracking-tight text-ink">{title}</h3>}
+            {sub && <p className="mt-0.5 text-[12.5px] leading-snug text-ink-3">{sub}</p>}
+          </div>
+          <button onClick={onClose} aria-label="close" className="-mr-1.5 -mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full text-ink-3 transition hover:bg-soft hover:text-ink"><X className="h-[18px] w-[18px]" /></button>
         </div>
-        {children}
+        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-6 pb-6">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

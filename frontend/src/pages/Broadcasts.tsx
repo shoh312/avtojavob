@@ -312,7 +312,7 @@ export default function Broadcasts() {
         )}
       </section>
 
-      <Modal open={confirmOpen} onClose={() => !busy && setConfirmOpen(false)} title={t('bc2.confirm_t')}>
+      <Modal open={confirmOpen} onClose={() => !busy && setConfirmOpen(false)} title={t('bc2.confirm_t')} icon={<Megaphone className="h-5 w-5" />}>
         <div className="space-y-4">
           <div className="rounded-2xl bg-soft p-3">
             <div className="whitespace-pre-wrap break-words text-[13.5px] leading-snug">{preview}</div>

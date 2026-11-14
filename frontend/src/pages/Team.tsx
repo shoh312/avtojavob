@@ -43,14 +43,14 @@ function AiTestChat({ name }: { name: string }) {
   }
   const current = stages.find(s => s.id === stage)
   return (
-    <div className="flex h-[480px] flex-col overflow-hidden rounded-2xl border border-line">
+    <div className="flex h-[min(520px,70vh)] flex-col overflow-hidden rounded-2xl border border-line bg-white text-ink">
       <div className="flex items-center gap-2 border-b border-line bg-soft/60 px-3 py-2 text-[12px] text-ink-3">
         <KanbanSquare className="h-3.5 w-3.5" />{t('team.ai.t_stage')}
         <span className="chip bg-white font-semibold text-ink-2">{current?.name || '—'}</span>
-        <span className="ml-auto">{t('team.ai.t_safe')}</span>
+        <span className="ml-auto" />
         {msgs.length > 0 && <button onClick={() => { setMsgs([]); setStage(stages[0]?.id || '') }} title={t('team.ai.t_reset')} className="rounded-lg p-1 hover:bg-white hover:text-ink"><RotateCcw className="h-3.5 w-3.5" /></button>}
       </div>
-      <div ref={box} className="scrollbar-thin flex-1 space-y-3 overflow-y-auto bg-white p-4">
+      <div ref={box} className="scrollbar-thin flex-1 space-y-3 overflow-y-auto bg-gradient-to-b from-white to-[#fafafb] p-4">
         {msgs.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center text-center text-[13px] text-ink-4">
             <FlaskConical className="mb-2 h-6 w-6" />{t('team.ai.t_empty', { name })}
@@ -67,7 +67,7 @@ function AiTestChat({ name }: { name: string }) {
           <div key={i} className="flex items-start gap-2">
             <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#6d5dfc] to-[#e5161f] text-white"><Bot className="h-3.5 w-3.5" /></span>
             <div className="max-w-[82%] space-y-1.5">
-              <div className="whitespace-pre-wrap rounded-[18px] rounded-tl-md bg-soft px-3.5 py-2 text-[13px]">{m.content}</div>
+              <div className="whitespace-pre-wrap rounded-[18px] rounded-tl-md bg-[#f0f0f3] px-3.5 py-2 text-[13.5px] leading-snug text-ink">{m.content}</div>
               {m.products?.map(p => <div key={p.id} className="flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-[12px]"><ShoppingBag className="h-3.5 w-3.5 text-brand-600" /><b>{p.name}</b><span className="text-ink-3">{p.price}</span></div>)}
               <div className="flex flex-wrap gap-1">
                 {m.stage_name && <span className="chip bg-violet-50 text-[11px] text-violet-700"><KanbanSquare className="mr-1 h-3 w-3" />→ {m.stage_name}</span>}
@@ -127,10 +127,11 @@ function AiManagerCard({ ai, available, autoAssign, onChanged }: { ai: AiManager
           {ai && <button onClick={remove} className="rounded-xl p-2.5 text-white/60 hover:bg-white/10 hover:text-white"><Trash2 className="h-4 w-4" /></button>}
         </div>
       </div>
-      <Modal open={testOpen} onClose={() => setTestOpen(false)} title={`${t('team.ai.test')} · ${ai?.name || ''}`} wide>
+      <Modal open={testOpen} onClose={() => setTestOpen(false)} wide icon={<FlaskConical className="h-5 w-5" />}
+        title={`${t('team.ai.test')} · ${ai?.name || ''}`} sub={t('team.ai.t_safe')}>
         {testOpen && <AiTestChat name={ai?.name || 'AI'} />}
       </Modal>
-      <Modal open={open} onClose={() => setOpen(false)} title={t('team.ai.title')} wide>
+      <Modal open={open} onClose={() => setOpen(false)} title={t('team.ai.title')} sub={t('team.ai.sub')} icon={<Bot className="h-5 w-5" />} wide>
         <div className="space-y-4">
           <label className="block"><span className="label">{t('team.ai.name')}</span>
             <input className="input" value={f.name} maxLength={120} onChange={e => setF({ ...f, name: e.target.value })} /></label>

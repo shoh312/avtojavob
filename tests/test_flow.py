@@ -1195,3 +1195,16 @@ def test_webhook_block(client, monkeypatch):
     assert res["ok"] and res["payload"]["test"] is True
     assert client.post(f"/api/flows/{f['id']}/webhook-test", json={"url": "nope"}, headers=H).status_code == 400
     client.put(f"/api/flows/{f['id']}", json={"active": False}, headers=H)
+
+
+def test_detect_lang():
+    from app.services import detect_lang, language_hint
+    assert detect_lang("Хочу записаться") == "Russian"
+    assert detect_lang("Сколько стоит английский?") == "Russian"
+    assert detect_lang("Салом, нархаш чанд?") == "Tajik"
+    assert detect_lang("Мехоҳам ба курс сабти ном шавам") == "Tajik"
+    assert detect_lang("Narxi qancha?") == "Uzbek"
+    assert detect_lang("Dizayn kursiga yozilmoqchiman") == "Uzbek"
+    assert detect_lang("How much is the course?") == "English"
+    assert detect_lang("👍") is None
+    assert "Russian" in language_hint([{"role": "user", "content": "Привет"}])
