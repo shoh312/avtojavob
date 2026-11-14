@@ -1272,3 +1272,10 @@ def test_team_overview(client):
     assert isinstance(d["unassigned"], int)
     for m in d["members"]:
         assert {"assigned", "open", "won", "overdue"} <= set(m)
+
+
+def test_accounts_overview(client):
+    d = client.get("/api/accounts/overview").json()
+    assert d["used"] == len(d["items"]) >= 1 and d["limit"] >= 1
+    a = d["items"][0]
+    assert {"contacts", "flows_active", "sent_7d", "inbound_7d", "last_event_at", "token_days", "ai", "telegram"} <= set(a)

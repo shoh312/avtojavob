@@ -375,6 +375,32 @@ def instagram_callback(request: Request, code: str | None = None, state: str | N
     return RedirectResponse(f"/app/accounts?connected={quote(acc.username)}", status_code=303)
 
 
+@app.get("/api/accounts/overview")
+def accounts_overview(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Akkauntlar sahifasi: har bir akkaunt holati va ko'rsatkichlari."""
+    ws = user.workspace
+    since = utcnow() - timedelta(days=7)
+    items = []
+    for a in ws.accounts:
+        last_in = db.scalar(select(func.max(Message.created_at)).where(Message.account_id == a.id, Message.direction == "in"))
+        last_ev = db.scalar(select(func.max(EventLog.created_at)).where(EventLog.account_id == a.id))
+        last = max([x for x in (last_in, last_ev) if x], default=None)
+        days = (a.token_expires_at - utcnow()).days if a.token_expires_at else None
+        items.append({
+            **account_json(a),
+            "contacts": db.scalar(select(func.count(Contact.id)).where(Contact.account_id == a.id)) or 0,
+            "flows_active": db.scalar(select(func.count(Flow.id)).where(Flow.account_id == a.id, Flow.active.is_(True))) or 0,
+            "sent_7d": db.scalar(select(func.count(EventLog.id)).where(
+                EventLog.account_id == a.id, EventLog.kind.in_(SEND_KINDS), EventLog.created_at >= since)) or 0,
+            "inbound_7d": db.scalar(select(func.count(Message.id)).where(
+                Message.account_id == a.id, Message.direction == "in", Message.created_at >= since)) or 0,
+            "last_event_at": iso(last), "token_days": days,
+            "ai": a.ai_enabled, "telegram": bool(a.tg_chat_id),
+        })
+    plan = plan_json(ws)
+    return {"items": items, "limit": plan["accounts_limit"], "used": len(items), "ig_ready": settings.ig_ready}
+
+
 @app.post("/api/accounts/{account_id}/toggle")
 def account_toggle(account_id: int, user: User = Depends(owner_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
