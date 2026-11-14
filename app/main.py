@@ -1566,15 +1566,41 @@ def _member_json(db: Session, owner: User, u: User) -> dict:
             linked = db.scalar(select(TeamTg).where(TeamTg.user_id == u.id, TeamTg.account_id == acc.id)) is not None
             link = f"https://t.me/{acc.tg_bot_username}?start={tgbot.start_token(u.id, acc.id)}" if acc.tg_bot_username else ""
             links.append({"account_id": acc.id, "username": acc.username, "linked": linked, "link": link})
-    assigned = db.scalar(select(func.count(Contact.id)).where(Contact.assigned_to == u.id)) or 0
     return {"id": u.id, "name": u.name, "email": u.email, "avatar_url": avatar_url(u), "created_at": iso(u.created_at),
-            "last_login_at": iso(u.last_login_at), "assigned": assigned, "telegram": links}
+            "last_login_at": iso(u.last_login_at), "telegram": links, **_member_stats(db, owner, u)}
+
+
+def _stage_types(owner: User) -> dict[tuple[int, str], str]:
+    return {(a.id, s["id"]): s["type"] for a in owner.accounts for s in crm.get_stages(a)}
+
+
+def _member_stats(db: Session, owner: User, u: User) -> dict:
+    """Mijozlar soni, ochiq/sotilgan bitimlar, muddati o'tgan va bugungi vazifalar."""
+    types = _stage_types(owner)
+    acc_ids = [a.id for a in owner.accounts]
+    rows = db.execute(select(Contact.account_id, Contact.stage).where(
+        Contact.assigned_to == u.id, Contact.account_id.in_(acc_ids))).all() if acc_ids else []
+    kinds = [types.get((a, st or ""), "") for a, st in rows]
+    now = utcnow()
+    tasks = db.scalars(select(Note.remind_at).where(Note.created_by == u.id, Note.remind_at.is_not(None),
+                                                    Note.done.is_(False))).all()
+    return {"assigned": len(rows), "open": kinds.count("open"), "won": kinds.count("won"),
+            "overdue": sum(1 for r in tasks if r < now), "tasks": len(tasks)}
 
 
 @app.get("/api/team")
 def team_list(user: User = Depends(owner_user), db: Session = Depends(get_db)):
+    acc_ids = [a.id for a in user.accounts]
+    types = _stage_types(user)
+    unassigned = 0
+    if acc_ids:
+        rows = db.execute(select(Contact.account_id, Contact.stage).where(
+            Contact.account_id.in_(acc_ids), Contact.assigned_to.is_(None), Contact.stage.is_not(None))).all()
+        unassigned = sum(1 for a, st in rows if types.get((a, st)) == "open")
+    owner = {"id": user.id, "name": user.name, "email": user.email, "avatar_url": avatar_url(user),
+             "last_login_at": iso(user.last_login_at), "telegram": [], **_member_stats(db, user, user)}
     return {"members": [_member_json(db, user, m) for m in crm.team_members(db, user.id) if not m.is_ai],
-            "auto_assign": user.auto_assign}
+            "owner": owner, "unassigned": unassigned, "auto_assign": user.auto_assign}
 
 
 @app.post("/api/team")

@@ -1264,3 +1264,11 @@ def test_profile_avatar(client):
     assert client.patch("/api/me", json={"avatar": "999999-x.png"}, headers=H).json()["error"] == "bad_image"
     u = client.patch("/api/me", json={"avatar": ""}, headers=H).json()["user"]
     assert u["avatar_url"] == "" and client.get(f"/uploads/{up['image']}").status_code == 404
+
+
+def test_team_overview(client):
+    d = client.get("/api/team").json()
+    assert d["owner"]["email"] and {"assigned", "open", "won", "overdue", "tasks"} <= set(d["owner"])
+    assert isinstance(d["unassigned"], int)
+    for m in d["members"]:
+        assert {"assigned", "open", "won", "overdue"} <= set(m)
