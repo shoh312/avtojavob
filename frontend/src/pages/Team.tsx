@@ -10,7 +10,7 @@ type Member = { id: number; name: string; email: string; last_login_at: string |
 
 type AiManager = { id: number; name: string; instructions: string; followup_hours: number; take_all: boolean; assigned: number }
 
-type TestMsg = { role: 'user' | 'assistant'; content: string; stage_name?: string; note?: string; handoff?: boolean; products?: { id: number; name: string; price: string }[] }
+type TestMsg = { role: 'user' | 'assistant'; content: string; stage_name?: string; note?: string; handoff?: boolean; fields?: Record<string, string>; products?: { id: number; name: string; price: string }[] }
 
 function AiTestChat({ name }: { name: string }) {
   const { t } = useI18n()
@@ -32,10 +32,10 @@ function AiTestChat({ name }: { name: string }) {
     const next: TestMsg[] = [...msgs, { role: 'user', content: v }]
     setMsgs(next); setText(''); setBusy(true)
     try {
-      const r = await api.post<{ reply: string; stage: string | null; stage_name: string; note: string; handoff: boolean; products: { id: number; name: string; price: string }[] }>(
+      const r = await api.post<{ reply: string; stage: string | null; stage_name: string; note: string; handoff: boolean; fields: Record<string, string>; products: { id: number; name: string; price: string }[] }>(
         '/api/team/ai/test', { account_id: account.id, stage, messages: next.map(m => ({ role: m.role, content: m.content })) })
       if (r.stage) setStage(r.stage)
-      setMsgs([...next, { role: 'assistant', content: r.reply || '…', stage_name: r.stage_name, note: r.note, handoff: r.handoff, products: r.products }])
+      setMsgs([...next, { role: 'assistant', content: r.reply || '…', stage_name: r.stage_name, note: r.note, handoff: r.handoff, fields: r.fields, products: r.products }])
     } catch (err) {
       const code = err instanceof ApiError ? err.code : ''
       setMsgs([...next, { role: 'assistant', content: code === 'ai_unavailable' ? t('int.ai.unavailable') : t('common.error') }])
@@ -72,6 +72,7 @@ function AiTestChat({ name }: { name: string }) {
               <div className="flex flex-wrap gap-1">
                 {m.stage_name && <span className="chip bg-violet-50 text-[11px] text-violet-700"><KanbanSquare className="mr-1 h-3 w-3" />→ {m.stage_name}</span>}
                 {m.note && <span className="chip bg-amber-50 text-[11px] text-amber-800"><StickyNote className="mr-1 h-3 w-3" />{m.note}</span>}
+                {m.fields && Object.keys(m.fields).length > 0 && <span className="chip bg-sky-50 text-[11px] text-sky-700"><UserPlus className="mr-1 h-3 w-3" />{Object.values(m.fields).join(' · ')}</span>}
                 {m.handoff && <span className="chip bg-emerald-50 text-[11px] text-emerald-700"><Handshake className="mr-1 h-3 w-3" />{t('team.ai.t_handoff')}</span>}
               </div>
             </div>

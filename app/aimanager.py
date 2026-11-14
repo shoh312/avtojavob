@@ -11,6 +11,7 @@ Jim qolgan mijozga belgilangan soatdan keyin bir marta follow-up yuboriladi (24 
 
 import json
 import logging
+import re
 from datetime import timedelta
 
 from sqlalchemy import func, select
@@ -53,7 +54,13 @@ information is written in another language. Short, warm, human: plain text, no m
 - Never guess facts that are not written in the business information (address, schedule, discounts) — say you will \
 check with a colleague and set handoff to true.
 - Use ONLY facts from the business information and catalog. Never invent prices or promises.
-- Ask for the phone number once when the customer is interested; don't repeat if already given or refused.
+- If the customer asks the price (or wants to buy) without naming the product/course and there are several, briefly \
+list them and ask which one interests them.
+- When the product is clear: give its price and one short benefit, then ask in ONE sentence for the contact details \
+you don't have yet: name, phone number and email. Ask once; don't insist. When the customer sends them, put them into \
+"fields".
+- When you have the phone number (and ideally name/email), thank them, say the manager will contact them, and set \
+handoff to true.
 - When you mention specific products, add their tags at the end of reply, e.g. [[product:12]] (max 3).
 - Greet only at the start of the conversation.
 
@@ -70,7 +77,10 @@ Business information:
 {(account.ai_prompt or "").strip() or "(none)"}
 {("Product catalog:" + chr(10) + cat) if cat else ""}
 
-Return ONLY JSON: {{"reply": "...", "stage": "<id or null>", "note": "<short note for CRM or null>", "handoff": false}}"""
+Known customer details: {{known}}
+
+Return ONLY JSON: {{"reply": "...", "stage": "<id or null>", "note": "<short note for CRM or null>", "handoff": false, \
+"fields": {{"name": null, "phone": null, "email": null}}}}"""
 
 
 def _history(db: Session, contact: Contact) -> list[dict]:
@@ -80,11 +90,20 @@ def _history(db: Session, contact: Contact) -> list[dict]:
 
 
 def _ask(db: Session, manager: User, account: IGAccount, contact: Contact | None, followup: bool,
-         history: list[dict] | None = None, stage_id: str | None = None) -> dict | None:
+         history: list[dict] | None = None, stage_id: str | None = None, hint: str | None = None) -> dict | None:
     products = catalog.active_products(db, account.id)
     current = crm.stage_by_id(account, contact.stage if contact is not None else stage_id)
     system = _system(manager, account, products, followup).replace("{current}", current["name"] if current else "none")
+    if contact is not None:
+        f = contact.fields
+        known = ", ".join(f"{k}: {v}" for k, v in (("name", contact.name or f.get("name")), ("phone", f.get("phone")),
+                                                    ("email", f.get("email"))) if v) or "none"
+    else:
+        known = "none"
+    system = system.replace("{known}", known)
     history = list(history) if history is not None else _history(db, contact)
+    if hint:
+        history.append({"role": "user", "content": hint})
     system += services.language_hint(history)
     if followup:
         history.append({"role": "user", "content": "[The customer has been silent. Write the follow-up now.]"})
@@ -101,7 +120,7 @@ def _ask(db: Session, manager: User, account: IGAccount, contact: Contact | None
 
 
 def _apply(db: Session, manager: User, account: IGAccount, contact: Contact, data: dict, incoming: str) -> bool:
-    from .engine import log_event, notify_telegram, record_message, contact_card  # sikl importdan qochish
+    from .engine import contact_lang, log_event, record_message  # sikl importdan qochish
 
     reply, ids = catalog.split_tags(str(data.get("reply") or ""))
     products = catalog.active_products(db, account.id)
@@ -113,7 +132,7 @@ def _apply(db: Session, manager: User, account: IGAccount, contact: Contact, dat
         if reply:
             ig.send_dm(token, contact.igsid, {"text": reply[:1000]})
         if chosen:
-            ig.send_dm(token, contact.igsid, catalog.product_cards(account, chosen))
+            ig.send_dm(token, contact.igsid, catalog.product_cards(account, chosen, contact_lang(db, contact)))
     except ig.IGError as e:
         log_event(db, account, contact, "error", incoming, f"ai_manager → {e}")
         return False
@@ -122,6 +141,7 @@ def _apply(db: Session, manager: User, account: IGAccount, contact: Contact, dat
     record_message(db, account.id, contact, "out", (reply + cards).strip(), "ai")
 
     author = f"🤖 {manager.name or 'AI'}"
+    save_fields(db, contact, data.get("fields"))
     stage = data.get("stage")
     target = crm.stage_by_id(account, stage) if isinstance(stage, str) else None
     if target and target["type"] != "won" and stage != contact.stage:
@@ -150,7 +170,39 @@ def simulate(db: Session, manager: User, account: IGAccount, history: list[dict]
     return {"reply": reply, "products": [p for pid in ids for p in products if p.id == pid],
             "stage": target["id"] if target and target["id"] != stage_id else None,
             "stage_name": target["name"] if target and target["id"] != stage_id else "",
-            "note": "" if note.lower() == "null" else note[:500], "handoff": data.get("handoff") is True}
+            "note": "" if note.lower() == "null" else note[:500], "handoff": data.get("handoff") is True,
+            "fields": clean_fields(data.get("fields"))}
+
+
+def clean_fields(raw) -> dict:
+    """AI qaytargan ism/telefon/email — tekshirilgan holda."""
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    name = str(raw.get("name") or "").strip()
+    if name and name.lower() not in ("null", "none") and len(name) <= 80:
+        out["name"] = name
+    phone = str(raw.get("phone") or "").strip()
+    if len(re.sub(r"\D", "", phone)) >= 7:
+        out["phone"] = phone[:40]
+    email = str(raw.get("email") or "").strip()
+    if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        out["email"] = email[:120].lower()
+    return out
+
+
+def save_fields(db: Session, contact: Contact, raw) -> None:
+    found = clean_fields(raw)
+    if not found:
+        return
+    if found.get("name") and not contact.name:
+        contact.name = found["name"]
+    fields = contact.fields
+    for k in ("name", "phone", "email"):
+        if found.get(k) and not fields.get(k):
+            fields[k] = found[k]
+    contact.fields = fields
+    db.commit()
 
 
 def handoff(db: Session, manager: User, account: IGAccount, contact: Contact, reason: str) -> None:
@@ -170,12 +222,12 @@ def handoff(db: Session, manager: User, account: IGAccount, contact: Contact, re
     notify_telegram(db, account, contact_card(contact, f"🤝 {manager.name or 'AI'}: {reason[:300]}"), contact, target.id)
 
 
-def reply(db: Session, account: IGAccount, contact: Contact, text: str) -> bool:
+def reply(db: Session, account: IGAccount, contact: Contact, text: str, hint: str | None = None) -> bool:
     """Kiruvchi xabarga AI menejer javobi. True — javob yuborildi."""
     manager = db.get(User, contact.assigned_to) if contact.assigned_to else None
     if not is_ai_manager(manager) or not services.ai_available(db):
         return False
-    data = _ask(db, manager, account, contact, followup=False)
+    data = _ask(db, manager, account, contact, followup=False, hint=hint)
     if not data:
         return False
     contact.ai_followup_at = None

@@ -720,7 +720,7 @@ def test_lead_capture_from_direct(client, monkeypatch):
         {"sender": {"id": "lead-1"}, "recipient": {"id": IG_ID}, "timestamp": 1, "message": {"mid": mid, "text": text}}]}]}
     hook(client, msg(LONG_MID + "l1", "Narxi qancha?"))
     assert seen["leads"] == "ask"  # AI telefon so'rashga yo'naltirilgan
-    assert "FIRST answer with the facts" in services.build_system("x", "ask") and "only ONCE" in services.build_system("x", "ask")
+    assert "FIRST give its price" in services.build_system("x", "ask") and "only ONCE" in services.build_system("x", "ask")
     assert "manager will reply soon" not in services.build_system("x", "ask")
     sent.clear()
     hook(client, msg(LONG_MID + "l2", "Mening raqamim 90 123 45 67"))
@@ -788,7 +788,7 @@ def test_product_catalog(client, monkeypatch):
     hook(client, {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [
         {"sender": {"id": "shop-1"}, "recipient": {"id": IG_ID}, "timestamp": 1,
          "postback": {"mid": LONG_MID + "p2", "title": "🛒 Buyurtma berish", "payload": f"O:{p1['id']}"}}]}]})
-    assert "telefon raqamingizni" in calls[-1][2]["text"]
+    assert "telefon raqamingiz" in calls[-1][2]["text"]
     with SessionLocal() as db:
         c = db.query(Contact).filter_by(igsid="shop-1").one()
         assert c.fields["product"] == "Cyberlab" and c.stage
@@ -1208,3 +1208,28 @@ def test_detect_lang():
     assert detect_lang("How much is the course?") == "English"
     assert detect_lang("👍") is None
     assert "Russian" in language_hint([{"role": "user", "content": "Привет"}])
+
+
+def test_sales_helpers_and_echo_twin(client):
+    from app import aimanager, engine
+    from app.models import Message
+    from app.services import conversation_lang
+    assert conversation_lang(["Narxi qancha?", "🛒 Заказать", "[🛒 Заказать]"]) == "Uzbek"
+    assert conversation_lang(["Сколько стоит?", "Ali 928415552"]) == "Russian"
+    assert aimanager.clean_fields({"name": "Ali", "phone": "92 841 55 52", "email": "A@B.TJ"}) == \
+        {"name": "Ali", "phone": "92 841 55 52", "email": "a@b.tj"}
+    assert aimanager.clean_fields({"name": "null", "phone": "12", "email": "x"}) == {}
+
+    engine.ECHO_WAIT_SECONDS = 0
+    with SessionLocal() as db:
+        acc = db.get(engine.IGAccount, S["acc"])
+        c = engine.get_contact(db, acc, "twin-user")
+        engine.record_message(db, acc.id, c, "out", "Python kursi 1200 TJS turadi.  🛍 Python", "ai")
+        cid = c.id
+    echo = lambda mid, msg: {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [  # noqa: E731
+        {"sender": {"id": IG_ID}, "recipient": {"id": "twin-user"}, "timestamp": 1, "message": {"mid": mid, "is_echo": True, **msg}}]}]}
+    hook(client, echo("tw-1", {"text": "Python kursi 1200 TJS turadi."}))
+    hook(client, echo("tw-2", {"attachments": [{"type": "template", "payload": {}}]}))
+    with SessionLocal() as db:
+        rows = db.query(Message).filter_by(contact_id=cid).all()
+        assert [(m.source, m.ext_id != "") for m in rows] == [("ai", True)]

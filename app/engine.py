@@ -116,6 +116,32 @@ def mid_key(mid: str) -> str:
     return hashlib.sha1(mid.encode()).hexdigest() if mid else ""
 
 
+def contact_lang(db: Session, contact: Contact) -> str | None:
+    """Mijoz yozayotgan til kodi (uz/ru/tj/en) — oxirgi kiruvchi xabarlar bo'yicha."""
+    rows = db.scalars(select(Message.text).where(Message.contact_id == contact.id, Message.direction == "in")
+                      .order_by(Message.id.desc()).limit(10)).all()
+    lang = services.conversation_lang(list(reversed(rows)))
+    return services.LANG_CODES.get(lang) if lang else None
+
+
+def _out_twin(existing: list, text: str, when, window: int = 180):
+    """ChatFlow yozib qo'ygan chiquvchi xabar (echo/tarix takrori). -> (xabar, media_mi) yoki (None, False)."""
+    media = not text or text.startswith("[")
+    for m in existing:
+        if m.direction != "out" or m.source == "app":
+            continue
+        if abs((m.created_at - when).total_seconds()) > window:
+            continue
+        if media:
+            return m, True  # kartochka/rasm — matnli javob bilan birga yuborilgan
+        if m.ext_id:
+            continue
+        a, b = (m.text or "").strip()[:60], text.strip()[:60]
+        if a and b and (a.startswith(b) or b.startswith(a)):
+            return m, False
+    return None, False
+
+
 def record_message(db: Session, account_id: int, contact: Contact, direction: str, text: str, source: str,
                    mid: str = "") -> None:
     """Jonli chat tarixi."""
@@ -596,6 +622,14 @@ def handle_echo(db: Session, account: IGAccount, event: dict) -> None:
     if db.scalar(select(Message.id).where(Message.contact_id == contact.id, Message.ext_id == mid_key(mid))):
         return
     text = message.get("text") or echo_media_label(message) or "[media]"
+    recent = db.scalars(select(Message).where(Message.contact_id == contact.id, Message.direction == "out",
+                                              Message.created_at >= utcnow() - timedelta(minutes=5))).all()
+    twin, media = _out_twin(recent, text if message.get("text") else "[media]", utcnow(), 240)
+    if twin:
+        if not media:
+            twin.ext_id = mid_key(mid)
+            db.commit()
+        return  # buni ChatFlow o'zi yuborgan
     record_message(db, account.id, contact, "out", text, "app", mid)
     contact.unread = 0  # egasi javob berdi — o'qilgan
     until = utcnow() + timedelta(minutes=AGENT_PAUSE_MINUTES)
@@ -626,8 +660,14 @@ def sync_history(db: Session, account: IGAccount, contact: Contact) -> int:
         direction = "in" if it["from_id"] == contact.igsid else "out"
         text = (it["text"] or "[media]").strip()
         # ChatFlow allaqachon yozib qo'ygan xabar (mid'siz) — matn va vaqt bo'yicha solishtiramiz
-        twin = next((m for m in existing if not m.ext_id and m.direction == direction and m.text == text[:2000]
-                     and abs((m.created_at - it["created_at"]).total_seconds()) < 600), None)
+        if direction == "out":
+            twin, media = _out_twin(existing, text, it["created_at"], 600)
+            if twin and media:
+                continue
+        else:
+            twin = next((m for m in existing if not m.ext_id and m.direction == "in"
+                         and m.text in (text[:2000], f"[{text}]"[:2000])
+                         and abs((m.created_at - it["created_at"]).total_seconds()) < 600), None)
         if twin:
             twin.ext_id = k
             continue
@@ -755,7 +795,7 @@ def ai_answer(db: Session, account: IGAccount, contact: Contact, text: str) -> b
         if answer:
             ig.send_dm(token, contact.igsid, {"text": answer})
         if chosen:
-            ig.send_dm(token, contact.igsid, catalog.product_cards(account, chosen))
+            ig.send_dm(token, contact.igsid, catalog.product_cards(account, chosen, contact_lang(db, contact)))
     except ig.IGError as e:
         log_event(db, account, contact, "error", text, f"ai_reply → {e}")
         return False
@@ -778,16 +818,21 @@ def handle_order(db: Session, account: IGAccount, contact: Contact, product_id: 
     crm.add_note(db, contact, f"🛒 {p.name}" + (f" — {p.price}" if p.price else ""), "⚡ Instagram")
     if not contact.stage:
         crm.set_stage(db, contact, crm.get_stages(account)[0]["id"], "⚡ Instagram")
+    log_event(db, account, contact, "click", f"[🛒 {p.name}]", p.name)
+    if account.tg_chat_id:
+        notify_telegram(db, account, contact_card(contact, f"🛒 {p.name}" + (f" — {p.price}" if p.price else "")), contact)
+    # AI menejerga biriktirilgan mijoz — suhbatni u davom ettiradi
+    if aimanager.reply(db, account, contact, f"[🛒 {p.name}]",
+                       hint=f"[The customer pressed «Order» on «{p.name}» ({p.price}). Confirm the choice and ask for "
+                            f"the contact details you don't have yet (name, phone, email).]"):
+        return
     has_phone = bool(contact.fields.get("phone"))
-    reply = catalog.t(account, "thanks" if has_phone else "ask_phone", p=p.name)
+    reply = catalog.t(account, "thanks" if has_phone else "ask_phone", contact_lang(db, contact), p=p.name)
     try:
         ig.send_dm(decrypt(account.access_token_enc), contact.igsid, {"text": reply})
         record_message(db, account.id, contact, "out", reply, "ai")
     except ig.IGError as e:
         log_event(db, account, contact, "error", p.name, f"order → {e}")
-    log_event(db, account, contact, "click", f"[🛒 {p.name}]", p.name)
-    if account.tg_chat_id:
-        notify_telegram(db, account, contact_card(contact, f"🛒 {p.name}" + (f" — {p.price}" if p.price else "")), contact)
 
 
 def run_broadcast(broadcast_id: int) -> None:

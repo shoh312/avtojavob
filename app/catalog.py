@@ -14,10 +14,10 @@ TAG = re.compile(r"\[\[\s*product\s*:\s*(\d+)\s*\]\]", re.I)
 TXT = {
     "order_btn": {"uz": "🛒 Buyurtma berish", "ru": "🛒 Заказать", "tj": "🛒 Фармоиш додан", "en": "🛒 Order"},
     "more_btn": {"uz": "Batafsil", "ru": "Подробнее", "tj": "Муфассал", "en": "Details"},
-    "ask_phone": {"uz": "Ajoyib tanlov! 🙌 «{p}» buyurtmasi uchun telefon raqamingizni yozing — menejerimiz tez orada bog'lanadi.",
-                  "ru": "Отличный выбор! 🙌 Чтобы оформить «{p}», напишите ваш номер телефона — менеджер скоро свяжется.",
-                  "tj": "Интихоби олӣ! 🙌 Барои фармоиши «{p}» рақами телефони худро нависед — менеҷер ба зудӣ тамос мегирад.",
-                  "en": "Great choice! 🙌 To order “{p}”, send your phone number — our manager will contact you shortly."},
+    "ask_phone": {"uz": "Ajoyib tanlov! 🙌 «{p}» uchun ismingiz, telefon raqamingiz va email'ingizni yozing — menejerimiz tez orada bog'lanadi.",
+                  "ru": "Отличный выбор! 🙌 Чтобы оформить «{p}», напишите ваше имя, телефон и email — менеджер скоро свяжется.",
+                  "tj": "Интихоби олӣ! 🙌 Барои «{p}» ном, рақами телефон ва email-и худро нависед — менеҷер ба зудӣ тамос мегирад.",
+                  "en": "Great choice! 🙌 To order “{p}”, send your name, phone number and email — our manager will contact you shortly."},
     "thanks": {"uz": "Rahmat! «{p}» bo'yicha buyurtmangiz qabul qilindi — menejerimiz tez orada bog'lanadi ✅",
                "ru": "Спасибо! Заявка на «{p}» принята — менеджер скоро свяжется ✅",
                "tj": "Ташаккур! Фармоиши «{p}» қабул шуд — менеҷер ба зудӣ тамос мегирад ✅",
@@ -25,8 +25,8 @@ TXT = {
 }
 
 
-def t(account: IGAccount, key: str, **kw) -> str:
-    lang = account.user.lang if account.user else "en"
+def t(account: IGAccount, key: str, lang: str | None = None, **kw) -> str:
+    lang = lang or (account.user.lang if account.user else "en")
     return (TXT[key].get(lang) or TXT[key]["en"]).format(**kw)
 
 
@@ -69,7 +69,7 @@ def image_url(p: Product) -> str | None:
     return f"{settings.APP_URL}/uploads/{p.image}"
 
 
-def product_cards(account: IGAccount, products: list[Product]) -> dict:
+def product_cards(account: IGAccount, products: list[Product], lang: str | None = None) -> dict:
     """Instagram generic template (karusel): rasm, nom, narx, tugmalar."""
     elements = []
     for p in products[:10]:
@@ -77,9 +77,9 @@ def product_cards(account: IGAccount, products: list[Product]) -> dict:
         img = image_url(p)
         if img:
             el["image_url"] = img
-        buttons = [{"type": "postback", "title": t(account, "order_btn")[:20], "payload": f"{ORDER_PREFIX}{p.id}"}]
+        buttons = [{"type": "postback", "title": t(account, "order_btn", lang)[:20], "payload": f"{ORDER_PREFIX}{p.id}"}]
         if p.url:
-            buttons.append({"type": "web_url", "title": t(account, "more_btn")[:20], "url": p.url})
+            buttons.append({"type": "web_url", "title": t(account, "more_btn", lang)[:20], "url": p.url})
             el["default_action"] = {"type": "web_url", "url": p.url}
         el["buttons"] = buttons
         elements.append(el)

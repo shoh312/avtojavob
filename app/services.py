@@ -105,14 +105,14 @@ product or condition is there — say it). Never hold back information that is i
 """
 AI_NO_LEADS = """- If the answer isn't in the business information, say politely that a manager will reply soon.
 """
-AI_LEADS = """- You also collect leads: get the customer's phone number so a manager can call them back.
-- When the customer asks about prices, products, availability, delivery or how to order: FIRST answer with the facts \
-from the business information, THEN add one short sentence asking for their phone number (for example: "Leave your \
-phone number and our manager will contact you").
-- If the answer isn't in the business information, ask for their phone number so the manager can contact them.
-- Ask for the phone number only ONCE in the conversation. If one of your earlier messages already asked for it, \
-don't ask again — just answer the question (unless the customer says they want to order now).
-- Once the customer has given a phone number, or refused, never ask for it again.
+AI_LEADS = """- You also collect leads: the customer's name, phone number and email, so a manager can contact them.
+- If the customer asks the price (or wants to buy) without saying which product/course, and there are several, \
+briefly list them and ask which one interests them — don't send all prices at once.
+- When it is clear which product they mean: FIRST give its price and one short benefit, THEN in one short sentence \
+ask for their name, phone number and email (for example: "To sign you up, send your name, phone and email").
+- If the answer isn't in the business information, ask for their contacts so the manager can reply.
+- Ask for the contacts only ONCE. If you already asked, don't repeat — just answer (unless they want to order now). \
+If they gave only some of them, you may ask once for the missing ones. Never insist.
 """
 AI_LEADS_DONE = """- The customer has already given their phone number — don't ask for it again. If the answer isn't in the business \
 information, say a manager will contact them soon.
@@ -236,9 +236,27 @@ def detect_lang(text: str) -> str | None:
     return None
 
 
+LANG_CODES = {"Russian": "ru", "Tajik": "tj", "Uzbek": "uz", "English": "en"}
+# Tugma nomlari (masalan "🛒 Заказать") mijozning tilini ko'rsatmaydi
+_BUTTON_TITLES = {"🛒 buyurtma berish", "🛒 заказать", "🛒 фармоиш додан", "🛒 order", "batafsil", "подробнее",
+                  "муфассал", "details"}
+
+
+def conversation_lang(texts: list[str]) -> str | None:
+    """Mijoz xabarlari (eskidan yangiga) -> oxirgi aniqlanadigan til nomi."""
+    for text in reversed(texts):
+        for line in reversed((text or "").splitlines()):
+            line = line.strip()
+            if not line or line.startswith("[") or line.lower() in _BUTTON_TITLES:
+                continue
+            lang = detect_lang(line)
+            if lang:
+                return lang
+    return None
+
+
 def language_hint(history: list[dict]) -> str:
-    last = next((h["content"] for h in reversed(history) if h.get("role") == "user"), "")
-    lang = detect_lang(last)
+    lang = conversation_lang([h["content"] for h in history if h.get("role") == "user"])
     return (f"\n\nIMPORTANT: the customer's last message is in {lang}. Write your whole reply to the customer in {lang}."
             if lang else "")
 
