@@ -531,6 +531,21 @@ def flow_delete(flow_id: int, user: User = Depends(current_user), db: Session = 
     return {"ok": True}
 
 
+@app.post("/api/flows/{flow_id}/webhook-test")
+def flow_webhook_test(flow_id: int, body: dict = Body(...), user: User = Depends(current_user),
+                      db: Session = Depends(get_db)):
+    """Blokdagi URL'ga namunaviy JSON yuboradi (oxirgi kontakt ma'lumoti bilan)."""
+    from .engine import webhook_payload
+    flow = owned_flow(db, user, flow_id)
+    url = str(body.get("url") or "").strip()
+    if not url.startswith(("https://", "http://")):
+        raise HTTPException(400, "bad_url")
+    contact = db.scalars(select(Contact).where(Contact.account_id == flow.account_id)
+                         .order_by(Contact.id.desc()).limit(1)).first()
+    payload = webhook_payload(flow.account, flow, contact, {"extra": body.get("extra") or []}, test=True)
+    return {**services.send_webhook(url, payload), "payload": payload}
+
+
 @app.get("/api/flows/{flow_id}/stats")
 def flow_stats(flow_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
     flow = owned_flow(db, user, flow_id)

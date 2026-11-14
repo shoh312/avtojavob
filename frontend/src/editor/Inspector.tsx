@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ExternalLink, Info, MousePointerClick, Plus, Trash2, X } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ExternalLink, Info, Loader2, MousePointerClick, Plus, Send, Trash2, X, XCircle } from 'lucide-react'
 import { api, type Media, type TriggerKind } from '../api'
 import { useI18n, type TKey } from '../i18n'
-import { NODE_META, TRIGGER_META, uid, type NodeType } from './meta'
+import { NODE_META, TRIGGER_META, uid, webhookSample, type NodeType } from './meta'
 
 type Props = {
   node: { id: string; type: NodeType; data: Record<string, any> }
   accountId: number
+  flow?: { id: number; name: string }
   onChange: (patch: Record<string, any>) => void
   onDelete: () => void
   onClose: () => void
@@ -263,6 +264,81 @@ function ActionForm({ d, set, accountId }: { d: any; set: (p: any) => void; acco
   )
 }
 
+type WhResult = { ok: boolean; status: number; error: string; ms: number; body: string; payload: unknown }
+
+function WebhookForm({ d, set, flow }: { d: any; set: (p: any) => void; flow?: { id: number; name: string } }) {
+  const { t } = useI18n()
+  const extra: { key: string; value: string }[] = d.extra || []
+  const [busy, setBusy] = useState(false)
+  const [res, setRes] = useState<WhResult | null>(null)
+  const [showJson, setShowJson] = useState(false)
+  const setRow = (i: number, patch: Partial<{ key: string; value: string }>) =>
+    set({ extra: extra.map((r, j) => (j === i ? { ...r, ...patch } : r)) })
+  const valid = /^https?:\/\/\S+\.\S+/.test(d.url || '')
+  const test = async () => {
+    if (!flow) return
+    setBusy(true); setRes(null)
+    try { setRes(await api.post<WhResult>(`/api/flows/${flow.id}/webhook-test`, { url: d.url, extra })) }
+    catch { setRes({ ok: false, status: 0, error: 'request_failed', ms: 0, body: '', payload: null }) }
+    finally { setBusy(false) }
+  }
+  return (
+    <div className="space-y-5">
+      <Field label={t('insp.webhook_url')} hint={t('wh.url_hint')}>
+        <input className="input font-mono text-[13px]" value={d.url || ''} placeholder="https://hook.eu1.make.com/…"
+          onChange={e => { set({ url: e.target.value.trim() }); setRes(null) }} />
+      </Field>
+
+      <div>
+        <span className="label">{t('wh.extra')}</span>
+        <div className="space-y-1.5">
+          {extra.map((r, i) => (
+            <div key={i} className="flex items-center gap-1.5">
+              <input className="input w-[38%] font-mono text-[12.5px]" value={r.key} placeholder={t('wh.key')}
+                onChange={e => setRow(i, { key: e.target.value.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 40) })} />
+              <input className="input flex-1 text-[12.5px]" value={r.value} placeholder={t('wh.value')} onChange={e => setRow(i, { value: e.target.value })} />
+              <button type="button" onClick={() => set({ extra: extra.filter((_, j) => j !== i) })} className="rounded-lg p-1.5 text-ink-4 hover:bg-soft hover:text-brand-600"><X className="h-3.5 w-3.5" /></button>
+            </div>
+          ))}
+        </div>
+        {extra.length < 20 && (
+          <button type="button" onClick={() => set({ extra: [...extra, { key: '', value: '' }] })}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12.5px] font-semibold text-brand-700 hover:bg-brand-50">
+            <Plus className="h-3.5 w-3.5" />{t('wh.add')}
+          </button>
+        )}
+        <p className="hint">{t('wh.extra_hint')}</p>
+      </div>
+
+      <div className="rounded-2xl border border-line p-3">
+        <button type="button" disabled={!valid || busy || !flow} onClick={test}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-ink py-2.5 text-[13px] font-semibold text-white transition hover:bg-black disabled:opacity-40">
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}{t('wh.test')}
+        </button>
+        {res && (
+          <div className={`mt-2.5 rounded-xl px-3 py-2 text-[12.5px] ${res.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-brand-50 text-brand-800'}`}>
+            <div className="flex items-center gap-1.5 font-semibold">
+              {res.ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+              {res.ok ? t('wh.test_ok', { s: res.status, ms: res.ms }) : `${t('wh.test_fail')} · ${res.error === 'blocked_url' ? t('wh.blocked') : res.error}`}
+            </div>
+            {res.body && <pre className="mt-1.5 max-h-20 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] opacity-80">{res.body}</pre>}
+          </div>
+        )}
+        <button type="button" onClick={() => setShowJson(v => !v)} className="mt-2 flex w-full items-center gap-1.5 px-1 text-[12px] font-semibold text-ink-3 hover:text-ink">
+          <ChevronDown className={`h-3.5 w-3.5 transition ${showJson ? '' : '-rotate-90'}`} />{t('wh.payload')}
+        </button>
+        {showJson && (
+          <pre className="scrollbar-thin mt-1.5 max-h-64 overflow-auto rounded-xl bg-[#0f0f12] p-3 font-mono text-[11px] leading-relaxed text-[#e6e6ea]">
+            {JSON.stringify(res?.payload || webhookSample(flow || { id: 0, name: '' }, extra), null, 2)}
+          </pre>
+        )}
+      </div>
+
+      <Note>{t('wh.branches')}</Note>
+    </div>
+  )
+}
+
 function DelayForm({ d, set }: { d: any; set: (p: any) => void }) {
   const { t } = useI18n()
   return (
@@ -281,7 +357,7 @@ function DelayForm({ d, set }: { d: any; set: (p: any) => void }) {
   )
 }
 
-export default function Inspector({ node, accountId, onChange, onDelete, onClose }: Props) {
+export default function Inspector({ node, accountId, flow, onChange, onDelete, onClose }: Props) {
   const { t } = useI18n()
   const meta = NODE_META[node.type]
   const Icon = meta.icon
@@ -303,6 +379,7 @@ export default function Inspector({ node, accountId, onChange, onDelete, onClose
         {node.type === 'condition' && <ConditionForm d={d} set={onChange} />}
         {node.type === 'action' && <ActionForm d={d} set={onChange} accountId={accountId} />}
         {node.type === 'delay' && <DelayForm d={d} set={onChange} />}
+        {node.type === 'webhook' && <WebhookForm d={d} set={onChange} flow={flow} />}
       </div>
       {node.type !== 'trigger' && (
         <div className="border-t border-line p-4">

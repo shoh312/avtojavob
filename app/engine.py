@@ -302,6 +302,30 @@ def evaluate(ctx: Ctx, d: dict) -> bool:
     return False
 
 
+def webhook_payload(account, flow, c, d: dict, test: bool = False) -> dict:
+    """Webhook'ga yuboriladigan JSON: kontakt + ssenariy + blokdagi qo'shimcha maydonlar."""
+    fields = c.fields if c is not None else {"phone": "+992 90 123 45 67"}
+    extra = {}
+    for row in d.get("extra") or []:
+        key = str((row or {}).get("key") or "").strip()
+        if key:
+            extra[key[:40]] = fill(str(row.get("value") or ""), c)[:500] if c is not None else str(row.get("value") or "")
+    return {
+        "event": "flow_webhook", "test": test, "sent_at": utcnow().replace(microsecond=0).isoformat() + "Z",
+        "flow": {"id": flow.id, "name": flow.name}, "account": account.username,
+        "contact": {
+            "id": c.id if c is not None else 0,
+            "igsid": c.igsid if c is not None else "1234567890",
+            "username": c.username if c is not None else "test_user",
+            "name": c.name if c is not None else "Test User",
+            "phone": fields.get("phone", ""), "email": fields.get("email", ""),
+            "stage": (c.stage or "") if c is not None else "",
+            "tags": c.tags if c is not None else ["lead"], "fields": fields,
+        },
+        "data": extra,
+    }
+
+
 def apply_action(ctx: Ctx, d: dict) -> None:
     c = ctx.contact
     op = d.get("op")
@@ -323,10 +347,7 @@ def apply_action(ctx: Ctx, d: dict) -> None:
                 not crm.stage_by_id(ctx.account, d.get("stage")):
             ctx.log("error", "set_stage → unknown_stage")
     elif op == "webhook":
-        payload = {"event": "flow_webhook", "flow": {"id": ctx.flow.id, "name": ctx.flow.name},
-                   "account": ctx.account.username,
-                   "contact": {"id": c.id, "username": c.username, "name": c.name, "tags": c.tags, "fields": c.fields}}
-        problem = services.post_webhook((d.get("url") or "").strip(), payload)
+        problem = services.post_webhook((d.get("url") or "").strip(), webhook_payload(ctx.account, ctx.flow, c, d))
         ctx.log("error" if problem else "webhook", f"webhook → {problem}" if problem else d.get("url", ""))
     ctx.db.commit()
 
@@ -370,6 +391,13 @@ def run_from(ctx: Ctx, node_id: str | None) -> None:
             apply_action(ctx, d)
             bump(db, ctx.flow.id, node_id, "done")
             node_id = g.next(node_id)
+        elif ntype == "webhook":
+            url = (d.get("url") or "").strip()
+            res = services.send_webhook(url, webhook_payload(ctx.account, ctx.flow, ctx.contact, d))
+            bump(db, ctx.flow.id, node_id, "sent" if res["ok"] else "failed")
+            ctx.log("webhook" if res["ok"] else "error", url if res["ok"] else f"webhook → {res['error']}")
+            fail = g.next(node_id, "fail")
+            node_id = g.next(node_id) if res["ok"] or not fail else fail
         elif ntype == "delay":
             target = g.next(node_id)
             if target:

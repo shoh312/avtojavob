@@ -18,10 +18,11 @@ Blok turlari va chiqishlari (sourceHandle):
 import re
 import uuid
 
-NODE_TYPES = {"trigger", "message", "question", "condition", "action", "delay"}
+NODE_TYPES = {"trigger", "message", "question", "condition", "action", "delay", "webhook"}
 TRIGGER_KINDS = {"comment", "dm", "story_reply", "story_mention"}
 MATCH_MODES = {"contains", "exact", "any"}
 FIELD_KEY = re.compile(r"^[a-z][a-z0-9_]{0,29}$")
+WEBHOOK_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,39}$")
 MAX_NODES = 120
 
 
@@ -108,6 +109,12 @@ def validate_graph(graph: dict) -> list[dict]:
                 err("action_tag")
             elif op == "set_field" and not FIELD_KEY.match((d.get("field") or "").strip().lower()):
                 err("action_field")
+        elif ntype == "webhook":
+            if not str(d.get("url") or "").strip().startswith(("https://", "http://")):
+                err("action_url")
+            elif not isinstance(d.get("extra") or [], list) or len(d.get("extra") or []) > 20 or any(
+                    not WEBHOOK_KEY.match(str((r or {}).get("key") or "")) for r in d.get("extra") or []):
+                err("webhook_key")
         elif ntype == "delay":
             try:
                 amount = int(d.get("amount") or 0)

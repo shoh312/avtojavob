@@ -1126,3 +1126,57 @@ def test_integrations_overview(client):
     d = client.get(f"/api/accounts/{S['acc']}/integrations").json()
     assert d["instagram"]["username"] and isinstance(d["webhook_flows"], list) and "bot" in d["telegram"]
     assert isinstance(d["ai_manager"], bool) and d["products"] >= 0
+
+
+def test_webhook_block(client, monkeypatch):
+    from app import services
+    posted = []
+
+    def fake(url, payload):
+        posted.append((url, payload))
+        return {"ok": "ok" in url, "status": 200 if "ok" in url else 500,
+                "error": "" if "ok" in url else "HTTP 500", "ms": 5, "body": ""}
+    monkeypatch.setattr(services, "send_webhook", fake)
+
+    def graph(url, fail_edge):
+        nodes = [
+            {"id": "t", "type": "trigger", "position": {"x": 0, "y": 0},
+             "data": {"kind": "dm", "keywords": "hookme", "match": "contains"}},
+            {"id": "w", "type": "webhook", "position": {"x": 300, "y": 0},
+             "data": {"url": url, "extra": [{"key": "source", "value": "insta {name}"}]}},
+            {"id": "ok", "type": "message", "position": {"x": 600, "y": 0}, "data": {"text": "Yuborildi", "buttons": []}},
+            {"id": "bad", "type": "message", "position": {"x": 600, "y": 200}, "data": {"text": "Xato", "buttons": []}},
+        ]
+        edges = [{"id": "e1", "source": "t", "target": "w", "sourceHandle": "out"},
+                 {"id": "e2", "source": "w", "target": "ok", "sourceHandle": "out"}]
+        if fail_edge:
+            edges.append({"id": "e3", "source": "w", "target": "bad", "sourceHandle": "fail"})
+        return {"nodes": nodes, "edges": edges}
+
+    f = create(client)
+    bad = client.put(f"/api/flows/{f['id']}", json={"graph": {**graph("ftp://x", True)}}, headers=H).json()
+    assert any(e["code"] == "action_url" for e in bad["errors"])
+    r = client.put(f"/api/flows/{f['id']}", json={"graph": graph("https://ok.example/h", True), "active": True}, headers=H).json()
+    assert r["active"], r["errors"]
+
+    calls.clear()
+    hook(client, messaging({"message": {"mid": LONG_MID + "wh1", "text": "hookme"}}, sender="wh-user"))
+    assert posted[-1][0] == "https://ok.example/h"
+    p = posted[-1][1]
+    assert p["event"] == "flow_webhook" and p["test"] is False and p["data"]["source"].startswith("insta")
+    assert p["contact"]["igsid"] and "phone" in p["contact"]
+    assert any("Yuborildi" in str(x) for x in calls)
+
+    # xato bo'lsa "fail" tarmog'iga o'tadi
+    client.put(f"/api/flows/{f['id']}", json={"graph": graph("https://down.example/h", True)}, headers=H)
+    calls.clear()
+    hook(client, messaging({"message": {"mid": LONG_MID + "wh2", "text": "hookme"}}, sender="wh-user"))
+    assert any("Xato" in str(x) for x in calls) and not any("Yuborildi" in str(x) for x in calls)
+    st = client.get(f"/api/flows/{f['id']}/stats").json()["nodes"]["w"]
+    assert st.get("sent") == 1 and st.get("failed") == 1
+
+    # test tugmasi
+    res = client.post(f"/api/flows/{f['id']}/webhook-test", json={"url": "https://ok.example/t"}, headers=H).json()
+    assert res["ok"] and res["payload"]["test"] is True
+    assert client.post(f"/api/flows/{f['id']}/webhook-test", json={"url": "nope"}, headers=H).status_code == 400
+    client.put(f"/api/flows/{f['id']}", json={"active": False}, headers=H)

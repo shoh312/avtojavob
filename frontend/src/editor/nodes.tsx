@@ -1,6 +1,6 @@
 import { createContext, memo, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, Handle, Position, useReactFlow, type EdgeProps, type NodeProps } from '@xyflow/react'
-import { AlertCircle, Copy, ExternalLink, MoreHorizontal, MousePointerClick, Play, Trash2, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Copy, ExternalLink, Globe, MoreHorizontal, MousePointerClick, Play, Trash2, X, XCircle } from 'lucide-react'
 import { useI18n, type TKey } from '../i18n'
 import { NODE_META, TRIGGER_META, type NodeType } from './meta'
 
@@ -218,9 +218,36 @@ export const DelayNode = memo(({ id, data, selected }: NodeProps) => {
   )
 })
 
+export const WebhookNode = memo(({ id, data, selected }: NodeProps) => {
+  const { t } = useI18n()
+  const { stats } = useContext(EditorCtx)
+  const d = data as any
+  const s = stats[id] || {}
+  let host = ''
+  try { host = d.url ? new URL(d.url).host : '' } catch { host = String(d.url || '') }
+  const extra = ((d.extra || []) as { key: string }[]).filter(r => r.key)
+  return (
+    <Shell id={id} type="webhook" selected={!!selected} subtitle="POST · JSON" footer={<>
+      <OutRow id="out" tone="yes"><span className="inline-flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3 w-3" />{t('node.wh_ok')}</span>{s.sent ? <span className="text-ink-4">{s.sent}</span> : null}</OutRow>
+      <OutRow id="fail" tone="no"><span className="inline-flex items-center gap-1 text-brand-600"><XCircle className="h-3 w-3" />{t('node.wh_fail')}</span>{s.failed ? <span className="text-ink-4">{s.failed}</span> : null}</OutRow>
+    </>}>
+      <div className={`flex items-center gap-2 rounded-xl px-2.5 py-2 ${host ? 'bg-pink-50 text-pink-800' : 'bg-soft italic text-ink-4'}`}>
+        <Globe className="h-3.5 w-3.5 shrink-0" />
+        <span className="truncate font-mono text-[12px]">{host || 'https://…'}</span>
+      </div>
+      {extra.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {extra.slice(0, 4).map(r => <span key={r.key} className="chip font-mono text-[11px]">{r.key}</span>)}
+          {extra.length > 4 && <span className="chip">+{extra.length - 4}</span>}
+        </div>
+      )}
+    </Shell>
+  )
+})
+
 export const nodeTypes = {
   trigger: TriggerNode, message: MessageNode, question: QuestionNode,
-  condition: ConditionNode, action: ActionNode, delay: DelayNode,
+  condition: ConditionNode, action: ActionNode, delay: DelayNode, webhook: WebhookNode,
 }
 
 export function DeletableEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected, style }: EdgeProps) {

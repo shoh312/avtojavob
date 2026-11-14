@@ -4,13 +4,13 @@ import {
   Background, BackgroundVariant, ReactFlow, ReactFlowProvider, useEdgesState, useNodesState, useReactFlow,
   type Connection, type Edge, type FinalConnectionState, type Node, type NodeChange,
 } from '@xyflow/react'
-import { AlertCircle, ArrowLeft, Check, Loader2, Maximize2, Minus, MonitorSmartphone, Play, Plus } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Check, ChevronDown, Loader2, Maximize2, Minus, MonitorSmartphone, Play, Plus, Redo2, Undo2 } from 'lucide-react'
 import { api, type FlowFull, type ValidationError } from '../api'
 import { useI18n, type TKey } from '../i18n'
 import { Spinner, Toggle, useToast } from '../components/ui'
 import Inspector from './Inspector'
 import Simulator from './Simulator'
-import { defaultData, NODE_META, PALETTE, uid, type NodeType } from './meta'
+import { defaultData, PALETTE, PALETTE_GROUPS, uid, type NodeType, type PaletteItem } from './meta'
 import { EditorCtx, edgeTypes, nodeTypes } from './nodes'
 
 type SaveState = 'saved' | 'dirty' | 'saving'
@@ -48,6 +48,62 @@ function Editor({ flow }: { flow: FlowFull }) {
 
   const snapshot = useMemo(() => serialize(name, nodes, edges), [name, nodes, edges])
   const savedRef = useRef(snapshot)
+  const [palOpen, setPalOpen] = useState(() => { try { return localStorage.getItem('cf.pal') !== '0' } catch { return true } })
+
+  // --- bekor qilish / qaytarish (Ctrl+Z / Ctrl+Shift+Z)
+  const hist = useRef({ past: [] as string[], future: [] as string[], last: snapshot, restoring: false })
+  const [histTick, setHistTick] = useState(0)
+  useEffect(() => {
+    const h = hist.current
+    if (h.restoring) { h.restoring = false; h.last = snapshot; return }
+    const timer = setTimeout(() => {
+      if (snapshot === h.last) return
+      h.past = [...h.past.slice(-59), h.last]
+      h.future = []
+      h.last = snapshot
+      setHistTick(x => x + 1)
+    }, 450)
+    return () => clearTimeout(timer)
+  }, [snapshot])
+  const restore = useCallback((snap: string) => {
+    const g = JSON.parse(snap)
+    hist.current.restoring = true
+    hist.current.last = snap
+    setName(g.name)
+    setNodes(g.graph.nodes.map((n: Node) => ({ ...n, deletable: n.type !== 'trigger' })))
+    setEdges(g.graph.edges.map((e: Edge) => ({ ...e, type: 'deletable' })))
+    setSelectedId(null)
+    setHistTick(x => x + 1)
+  }, [setNodes, setEdges])
+  const undo = useCallback(() => {
+    const h = hist.current
+    const cur = serialize(name, rf.getNodes(), rf.getEdges())
+    const target = cur !== h.last ? h.last : h.past.pop()
+    if (!target) return
+    h.future.push(cur)
+    restore(target)
+  }, [name, rf, restore])
+  const redo = useCallback(() => {
+    const h = hist.current
+    const target = h.future.pop()
+    if (!target) return
+    h.past.push(serialize(name, rf.getNodes(), rf.getEdges()))
+    restore(target)
+  }, [name, rf, restore])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      const el = e.target as HTMLElement
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return
+      const k = e.key.toLowerCase()
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo() }
+      else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo, redo])
+  const canUndo = histTick >= 0 && (hist.current.past.length > 0 || snapshot !== hist.current.last)
+  const canRedo = histTick >= 0 && hist.current.future.length > 0
 
   // --- avtomatik saqlash
   const doSave = useCallback(async (extra?: { active: boolean }) => {
@@ -113,7 +169,7 @@ function Editor({ flow }: { flow: FlowFull }) {
     return !!target && target.type !== 'trigger'
   }, [rf])
 
-  const addNode = useCallback((type: NodeType, position?: { x: number; y: number }, from?: { source: string; handle: string | null }) => {
+  const addNode = useCallback((type: NodeType, position?: { x: number; y: number }, from?: { source: string; handle: string | null }, preset?: Record<string, any>) => {
     let pos = position
     if (!pos) {
       const box = wrapper.current?.getBoundingClientRect()
@@ -121,13 +177,15 @@ function Editor({ flow }: { flow: FlowFull }) {
       pos = { x: pos.x + (Math.random() * 40 - 20), y: pos.y + (Math.random() * 40 - 20) }
     }
     const id = uid()
-    setNodes(ns => [...ns.map(n => ({ ...n, selected: false })), { id, type, position: pos!, data: defaultData(type), selected: true }])
+    setNodes(ns => [...ns.map(n => ({ ...n, selected: false })), { id, type, position: pos!, data: { ...defaultData(type), ...(preset || {}) }, selected: true }])
     if (from) setEdges(es => [
       ...es.filter(e => !(e.source === from.source && (e.sourceHandle || 'out') === (from.handle || 'out'))),
       { id: uid(), source: from.source, target: id, sourceHandle: from.handle || 'out', type: 'deletable' },
     ])
     setSelectedId(id)
   }, [rf, setNodes, setEdges])
+  const addItem = useCallback((it: PaletteItem, position?: { x: number; y: number }, from?: { source: string; handle: string | null }) =>
+    addNode(it.type, position, from, it.preset), [addNode])
 
   const onConnectEnd = useCallback((event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
     if (state.isValid || !state.fromNode || state.fromHandle?.type !== 'source') return
@@ -138,11 +196,10 @@ function Editor({ flow }: { flow: FlowFull }) {
 
   const onDrop = useCallback((e: DragEvent) => {
     e.preventDefault()
-    const type = e.dataTransfer.getData('application/chatflow') as NodeType
-    if (!type) return
-    const pos = rf.screenToFlowPosition({ x: e.clientX - 136, y: e.clientY - 24 })
-    addNode(type, pos)
-  }, [rf, addNode])
+    const it = PALETTE.find(p => p.key === e.dataTransfer.getData('application/chatflow'))
+    if (!it) return
+    addItem(it, rf.screenToFlowPosition({ x: e.clientX - 136, y: e.clientY - 24 }))
+  }, [rf, addItem])
 
   const updateData = useCallback((id: string, patch: Record<string, any>) => {
     setNodes(ns => ns.map(n => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n)))
@@ -161,6 +218,7 @@ function Editor({ flow }: { flow: FlowFull }) {
       const waits = n.type === 'message' && ((n.data as any).buttons || []).some((b: any) => b.kind !== 'url')
       if (!waits) valid.add(`${n.id}|out`)
       if (n.type === 'condition') { valid.add(`${n.id}|yes`); valid.add(`${n.id}|no`) }
+      if (n.type === 'webhook') valid.add(`${n.id}|fail`)
       for (const b of ((n.data as any).buttons || [])) if (b.kind !== 'url') valid.add(`${n.id}|btn:${b.id}`)
     }
     if (edges.some(e => !valid.has(`${e.source}|${e.sourceHandle || 'out'}`)))
@@ -260,23 +318,37 @@ function Editor({ flow }: { flow: FlowFull }) {
             </ReactFlow>
 
             {/* bloklar paneli */}
-            <div className="absolute left-3 top-3 z-10 w-[200px] rounded-2xl border border-line bg-white/95 p-2 shadow-pop backdrop-blur sm:left-4 sm:top-4">
-              <div className="px-2 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-wider text-ink-4">{t('ed.add_block')}</div>
-              {PALETTE.map(type => {
-                const m = NODE_META[type], Icon = m.icon
-                return (
-                  <button key={type} draggable onDragStart={e => { e.dataTransfer.setData('application/chatflow', type); e.dataTransfer.effectAllowed = 'move' }}
-                    onClick={() => addNode(type)}
-                    className="group flex w-full cursor-grab items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-soft active:cursor-grabbing">
-                    <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg ${m.tint}`}><Icon className="h-[15px] w-[15px]" /></span>
-                    <span className="min-w-0">
-                      <span className="block text-[13px] font-semibold leading-tight">{t(m.label)}</span>
-                      <span className="block truncate text-[11px] leading-tight text-ink-3">{t(m.desc)}</span>
-                    </span>
-                  </button>
-                )
-              })}
-              <p className="px-2 pb-1 pt-2 text-[11px] leading-snug text-ink-4">{t('ed.drop_hint')}</p>
+            <div className="absolute left-3 top-3 z-10 w-[212px] rounded-2xl border border-line bg-white/95 p-1.5 shadow-pop backdrop-blur sm:left-4 sm:top-4">
+              <button onClick={() => setPalOpen(o => { try { localStorage.setItem('cf.pal', o ? '0' : '1') } catch { /* */ } return !o })}
+                className="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left hover:bg-soft">
+                <span className="grid h-6 w-6 place-items-center rounded-lg bg-brand-600 text-white"><Plus className="h-3.5 w-3.5" strokeWidth={2.6} /></span>
+                <span className="flex-1 text-[13px] font-bold">{t('ed.add_block')}</span>
+                <ChevronDown className={`h-4 w-4 text-ink-4 transition ${palOpen ? '' : '-rotate-90'}`} />
+              </button>
+              {palOpen && (
+                <div className="scrollbar-thin max-h-[calc(100vh-200px)] overflow-y-auto">
+                  {PALETTE_GROUPS.map(g => (
+                    <div key={g.label} className="mt-1">
+                      <div className="px-2 pb-0.5 pt-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-ink-4">{t(g.label)}</div>
+                      {g.items.map(it => {
+                        const Icon = it.icon
+                        return (
+                          <button key={it.key} draggable onDragStart={e => { e.dataTransfer.setData('application/chatflow', it.key); e.dataTransfer.effectAllowed = 'move' }}
+                            onClick={() => addItem(it)}
+                            className="group flex w-full cursor-grab items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-soft active:cursor-grabbing">
+                            <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg transition group-hover:scale-105 ${it.tint}`}><Icon className="h-[15px] w-[15px]" /></span>
+                            <span className="min-w-0">
+                              <span className="block text-[13px] font-semibold leading-tight">{t(it.label)}</span>
+                              <span className="block truncate text-[11px] leading-tight text-ink-3">{t(it.desc)}</span>
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  ))}
+                  <p className="px-2 pb-1 pt-2 text-[11px] leading-snug text-ink-4">{t('ed.drop_hint')}</p>
+                </div>
+              )}
             </div>
 
             {/* masshtab */}
@@ -284,6 +356,10 @@ function Editor({ flow }: { flow: FlowFull }) {
               <button title={t('ed.zoom_out')} onClick={() => rf.zoomOut({ duration: 200 })} className="p-2.5 text-ink-2 hover:bg-soft"><Minus className="h-4 w-4" /></button>
               <button title={t('ed.zoom_in')} onClick={() => rf.zoomIn({ duration: 200 })} className="border-x border-line p-2.5 text-ink-2 hover:bg-soft"><Plus className="h-4 w-4" /></button>
               <button title={t('ed.fit')} onClick={() => rf.fitView({ padding: 0.3, duration: 300, maxZoom: 1 })} className="p-2.5 text-ink-2 hover:bg-soft"><Maximize2 className="h-4 w-4" /></button>
+            </div>
+            <div className="absolute bottom-4 left-[150px] z-10 flex overflow-hidden rounded-xl border border-line bg-white shadow-card">
+              <button title={t('ed.undo')} disabled={!canUndo} onClick={undo} className="p-2.5 text-ink-2 hover:bg-soft disabled:text-ink-4 disabled:hover:bg-transparent"><Undo2 className="h-4 w-4" /></button>
+              <button title={t('ed.redo')} disabled={!canRedo} onClick={redo} className="border-l border-line p-2.5 text-ink-2 hover:bg-soft disabled:text-ink-4 disabled:hover:bg-transparent"><Redo2 className="h-4 w-4" /></button>
             </div>
 
             <div className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-xl border border-line bg-white px-3 py-2 text-[12px] text-ink-3 shadow-card md:hidden">
@@ -294,18 +370,20 @@ function Editor({ flow }: { flow: FlowFull }) {
             {menu && (
               <div className="absolute z-20 w-56 rounded-2xl border border-line bg-white p-1.5 shadow-pop animate-fade-up" style={{ left: menu.x, top: menu.y }}>
                 <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-4">{t('ed.connect_menu')}</div>
-                {PALETTE.map(type => {
-                  const m = NODE_META[type], Icon = m.icon
+                <div className="scrollbar-thin max-h-[320px] overflow-y-auto">
+                {PALETTE.map(it => {
+                  const Icon = it.icon
                   return (
-                    <button key={type} onClick={() => {
+                    <button key={it.key} onClick={() => {
                       const box = wrapper.current!.getBoundingClientRect()
-                      addNode(type, rf.screenToFlowPosition({ x: box.left + menu.x, y: box.top + menu.y - 30 }), { source: menu.source, handle: menu.handle })
+                      addItem(it, rf.screenToFlowPosition({ x: box.left + menu.x, y: box.top + menu.y - 30 }), { source: menu.source, handle: menu.handle })
                       setMenu(null)
-                    }} className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] font-medium hover:bg-soft">
-                      <span className={`grid h-6 w-6 place-items-center rounded-md ${m.tint}`}><Icon className="h-3.5 w-3.5" /></span>{t(m.label)}
+                    }} className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-[13px] font-medium hover:bg-soft">
+                      <span className={`grid h-6 w-6 place-items-center rounded-md ${it.tint}`}><Icon className="h-3.5 w-3.5" /></span>{t(it.label)}
                     </button>
                   )
                 })}
+                </div>
               </div>
             )}
           </div>
@@ -323,7 +401,7 @@ function Editor({ flow }: { flow: FlowFull }) {
             <aside className="absolute inset-y-14 right-0 z-30 w-full border-l border-line bg-white shadow-pop sm:w-[360px] lg:static lg:inset-auto lg:shadow-none">
               <Inspector key={selected.id}
                 node={{ id: selected.id, type: selected.type as NodeType, data: selected.data as Record<string, any> }}
-                accountId={flow.account_id}
+                accountId={flow.account_id} flow={{ id: flow.id, name }}
                 onChange={patch => updateData(selected.id, patch)}
                 onDelete={() => deleteNode(selected.id)}
                 onClose={() => { setSelectedId(null); setNodes(ns => ns.map(n => ({ ...n, selected: false }))) }} />

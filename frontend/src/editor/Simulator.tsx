@@ -128,6 +128,10 @@ export default function Simulator({ nodes, edges, startId, startKey = 0, account
         else if (op === 'webhook') add({ from: 'sys', icon: Webhook, text: `Webhook → ${String(d.url || '').replace(/^https?:\/\//, '')}` })
         id = next(id); continue
       }
+      if (n.type === 'webhook') {
+        add({ from: 'sys', icon: Webhook, text: `Webhook → ${String(d.url || '').replace(/^https?:\/\//, '').split('/')[0] || '…'}`, tone: 'ok' })
+        id = next(id); continue
+      }
       if (n.type === 'delay') {
         add({ from: 'sys', icon: Clock, text: t('sim.delay', { n: d.amount || 0, unit: t(d.unit === 'hours' ? 'insp.hours' : 'insp.minutes') }) })
         id = next(id); continue

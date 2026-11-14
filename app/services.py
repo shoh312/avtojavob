@@ -334,16 +334,26 @@ def safe_url(url: str) -> bool:
         return False
 
 
-def post_webhook(url: str, payload: dict) -> str | None:
-    """Xato bo'lsa matnini qaytaradi."""
+def send_webhook(url: str, payload: dict) -> dict:
+    """POST JSON -> {"ok", "status", "error", "ms", "body"} (body: javobning boshi)."""
+    import time as _time
     if not safe_url(url):
-        return "blocked_url"
+        return {"ok": False, "status": 0, "error": "blocked_url", "ms": 0, "body": ""}
+    t0 = _time.monotonic()
     try:
         r = _http.post(url, content=json.dumps(payload, ensure_ascii=False).encode(),
                        headers={"Content-Type": "application/json", "User-Agent": "ChatFlow-Webhook/1.0"},
                        follow_redirects=False)
-        if r.status_code >= 400:
-            return f"HTTP {r.status_code}"
     except httpx.HTTPError as e:
-        return str(e)[:200]
-    return None
+        return {"ok": False, "status": 0, "error": str(e)[:200] or type(e).__name__,
+                "ms": int((_time.monotonic() - t0) * 1000), "body": ""}
+    ms = int((_time.monotonic() - t0) * 1000)
+    ok = r.status_code < 400
+    return {"ok": ok, "status": r.status_code, "error": "" if ok else f"HTTP {r.status_code}", "ms": ms,
+            "body": (r.text or "")[:300]}
+
+
+def post_webhook(url: str, payload: dict) -> str | None:
+    """Xato bo'lsa matnini qaytaradi."""
+    res = send_webhook(url, payload)
+    return None if res["ok"] else res["error"]
