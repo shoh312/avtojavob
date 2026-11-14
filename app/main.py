@@ -451,6 +451,59 @@ def stats(account_id: int, user: User = Depends(current_user), db: Session = Dep
     }
 
 
+@app.get("/api/home")
+def home_overview(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Bosh sahifa: bugungi ko'rsatkichlar (o'tgan davr bilan), diqqat talab qiladiganlar, so'nggi suhbatlar."""
+    acc = owned_account(db, user, account_id)
+    now = utcnow()
+
+    def msgs(direction: str, a, b) -> int:
+        return db.scalar(select(func.count(Message.id)).where(
+            Message.account_id == acc.id, Message.direction == direction, Message.created_at >= a, Message.created_at < b)) or 0
+
+    def contacts(a, b) -> int:
+        return db.scalar(select(func.count(Contact.id)).where(
+            Contact.account_id == acc.id, Contact.created_at >= a, Contact.created_at < b)) or 0
+
+    def leads(a, b) -> int:
+        return db.scalar(select(func.count(func.distinct(EventLog.contact_id))).where(
+            EventLog.account_id == acc.id, EventLog.kind == "answer", EventLog.detail.like("%phone%"),
+            EventLog.created_at >= a, EventLog.created_at < b)) or 0
+
+    d1, d2, w1, w2 = now - timedelta(days=1), now - timedelta(days=2), now - timedelta(days=7), now - timedelta(days=14)
+    types = {s_["id"]: s_["type"] for s_ in crm.get_stages(acc)}
+    unassigned = sum(1 for (st,) in db.execute(select(Contact.stage).where(
+        Contact.account_id == acc.id, Contact.assigned_to.is_(None), Contact.stage.is_not(None))).all()
+        if types.get(st) == "open")
+    sources = dict(db.execute(select(Message.source, func.count(Message.id)).where(
+        Message.account_id == acc.id, Message.direction == "out", Message.created_at >= w1)
+        .group_by(Message.source)).all())
+    recent = db.scalars(select(Contact).where(Contact.account_id == acc.id, Contact.last_message_at.is_not(None))
+                        .order_by(Contact.last_message_at.desc()).limit(6)).all()
+    return {
+        "kpi": {
+            "in_24h": [msgs("in", d1, now), msgs("in", d2, d1)],
+            "out_24h": [msgs("out", d1, now), msgs("out", d2, d1)],
+            "contacts_7d": [contacts(w1, now), contacts(w2, w1)],
+            "leads_7d": [leads(w1, now), leads(w2, w1)],
+        },
+        "attention": {
+            "unread": db.scalar(select(func.count(Contact.id)).where(Contact.account_id == acc.id, Contact.unread > 0)) or 0,
+            "closing": db.scalar(select(func.count(Contact.id)).where(
+                Contact.account_id == acc.id, Contact.last_inbound_at > now - timedelta(hours=24),
+                Contact.last_inbound_at < now - timedelta(hours=21), Contact.unread > 0)) or 0,
+            "overdue": db.scalar(select(func.count(Note.id)).where(
+                Note.account_id == acc.id, Note.remind_at.is_not(None), Note.remind_at < now, Note.done.is_(False))) or 0,
+            "unassigned": unassigned,
+            "human": db.scalar(select(func.count(Contact.id)).where(
+                Contact.account_id == acc.id, Contact.bot_paused_until > now)) or 0,
+        },
+        "sources_7d": {k: sources.get(k, 0) for k in ("flow", "ai", "agent", "app", "broadcast")},
+        "recent": [_conv_json(c) for c in recent],
+        "ai": acc.ai_enabled, "ai_name": acc.ai_name or "",
+    }
+
+
 # ---------------------------------------------------------------- ssenariylar
 
 @app.get("/api/templates")

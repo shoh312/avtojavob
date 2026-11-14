@@ -1336,3 +1336,10 @@ def test_contact_avatars(client, monkeypatch):
         assert c.avatar.endswith(".png") and c.name == "Rasmli Mijoz"
     url = client.get(f"/api/inbox/{cid}").json()["contact"]["avatar_url"]
     assert url.startswith("/uploads/c") and client.get(url).status_code == 200
+
+
+def test_home_overview(client):
+    d = client.get(f"/api/home?account_id={S['acc']}").json()
+    assert set(d["kpi"]) == {"in_24h", "out_24h", "contacts_7d", "leads_7d"} and all(len(v) == 2 for v in d["kpi"].values())
+    assert {"unread", "closing", "overdue", "unassigned", "human"} <= set(d["attention"])
+    assert set(d["sources_7d"]) == {"flow", "ai", "agent", "app", "broadcast"} and len(d["recent"]) <= 6
