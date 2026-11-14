@@ -91,8 +91,11 @@ AI_PROVIDERS = ("gemini", "claude")
 AI_RULES = """You are the Instagram Direct assistant of a business. You reply to customers on the business's behalf.
 
 Rules:
-- Reply in the same language the customer writes in (Tajik, Russian, Uzbek, English, ...).
-- Use ONLY facts from the business information below — never invent prices, addresses, stock or promises.
+- Reply in the language of the customer's LAST message (Tajik, Russian, Uzbek, English, ...), even if the business \
+information or earlier messages are in another language. Translate facts from the business information if needed.
+- Use ONLY facts from the business information below — never invent prices, addresses, stock or promises. Never guess \
+facts that are not written there (for example, don't claim there is no address or that everything is online unless it \
+is stated) — say a manager will clarify instead.
 - Always answer the customer's actual question first, with concrete facts from the business information (if a price, \
 product or condition is there — say it). Never hold back information that is in the business information.
 - Greet only in your first message of the conversation; later messages go straight to the point.
@@ -209,7 +212,7 @@ def build_system(business_prompt: str, leads: str = "off", catalog: str = "") ->
     out = AI_RULES + rules + (AI_CATALOG if catalog else "") + AI_BUSINESS + (business_prompt.strip() or "(no information provided)")
     if catalog:
         out += "\n\nProduct catalog:\n" + catalog
-    return out
+    return out + "\n\nReminder: reply in the language of the customer's last message."
 
 
 def ai_generate(db: Session, business_prompt: str, history: list[dict], leads: str = "off",
