@@ -1571,6 +1571,29 @@ def team_ai_save(body: dict = Body(...), user: User = Depends(owner_user), db: S
     return _ai_manager_json(db, m)
 
 
+@app.post("/api/team/ai/test")
+def team_ai_test(body: dict = Body(...), user: User = Depends(owner_user), db: Session = Depends(get_db)):
+    """AI menejer bilan sinov suhbati (mijozga hech narsa yuborilmaydi, CRM o'zgarmaydi)."""
+    acc = owned_account(db, user, int(body.get("account_id") or 0))
+    m = aimanager.get_ai_manager(db, user.id)
+    if not m:
+        err("no_ai_manager")
+    if not services.ai_available(db):
+        err("ai_unavailable")
+    history = []
+    for row in (body.get("messages") or [])[-16:]:
+        role = "assistant" if (row or {}).get("role") == "assistant" else "user"
+        text = str((row or {}).get("content") or "").strip()[:1000]
+        if text:
+            history.append({"role": role, "content": text})
+    if not history or history[-1]["role"] != "user":
+        err("empty")
+    res = aimanager.simulate(db, m, acc, history, str(body.get("stage") or "") or None)
+    if not res:
+        err("ai_failed")
+    return {**res, "products": [_product_json(p) for p in res["products"]]}
+
+
 @app.delete("/api/team/ai")
 def team_ai_delete(user: User = Depends(owner_user), db: Session = Depends(get_db)):
     m = aimanager.get_ai_manager(db, user.id)

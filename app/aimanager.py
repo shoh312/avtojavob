@@ -48,7 +48,10 @@ Your job: help the customer, answer questions, recommend products, collect their
 {task}
 
 Rules:
-- Reply in the customer's language. Short, warm, human: plain text, no markdown, 1-4 sentences.
+- Reply in the language of the customer's LAST message (Uzbek, Russian, Tajik, English...), even if the business \
+information is written in another language. Short, warm, human: plain text, no markdown, 1-4 sentences.
+- Never guess facts that are not written in the business information (address, schedule, discounts) — say you will \
+check with a colleague and set handoff to true.
 - Use ONLY facts from the business information and catalog. Never invent prices or promises.
 - Ask for the phone number once when the customer is interested; don't repeat if already given or refused.
 - When you mention specific products, add their tags at the end of reply, e.g. [[product:12]] (max 3).
@@ -76,11 +79,12 @@ def _history(db: Session, contact: Contact) -> list[dict]:
     return [{"role": "user" if m.direction == "in" else "assistant", "content": m.text or "…"} for m in reversed(rows)]
 
 
-def _ask(db: Session, manager: User, account: IGAccount, contact: Contact, followup: bool) -> dict | None:
+def _ask(db: Session, manager: User, account: IGAccount, contact: Contact | None, followup: bool,
+         history: list[dict] | None = None, stage_id: str | None = None) -> dict | None:
     products = catalog.active_products(db, account.id)
-    current = crm.stage_by_id(account, contact.stage)
+    current = crm.stage_by_id(account, contact.stage if contact is not None else stage_id)
     system = _system(manager, account, products, followup).replace("{current}", current["name"] if current else "none")
-    history = _history(db, contact)
+    history = list(history) if history is not None else _history(db, contact)
     if followup:
         history.append({"role": "user", "content": "[The customer has been silent. Write the follow-up now.]"})
     text, error = services.ai_chat_json(db, system, history)
@@ -127,6 +131,25 @@ def _apply(db: Session, manager: User, account: IGAccount, contact: Contact, dat
     if data.get("handoff") is True:
         handoff(db, manager, account, contact, note or reply)
     return True
+
+
+def simulate(db: Session, manager: User, account: IGAccount, history: list[dict], stage_id: str | None,
+             followup: bool = False) -> dict | None:
+    """Sinov chati: AI menejer nima qilishini qaytaradi, lekin hech narsa yubormaydi va saqlamaydi."""
+    data = _ask(db, manager, account, None, followup, history=history, stage_id=stage_id)
+    if not data:
+        return None
+    reply, ids = catalog.split_tags(str(data.get("reply") or ""))
+    products = catalog.active_products(db, account.id)
+    stage = data.get("stage")
+    target = crm.stage_by_id(account, stage) if isinstance(stage, str) else None
+    if target and target["type"] == "won":
+        target = None
+    note = str(data.get("note") or "").strip()
+    return {"reply": reply, "products": [p for pid in ids for p in products if p.id == pid],
+            "stage": target["id"] if target and target["id"] != stage_id else None,
+            "stage_name": target["name"] if target and target["id"] != stage_id else "",
+            "note": "" if note.lower() == "null" else note[:500], "handoff": data.get("handoff") is True}
 
 
 def handoff(db: Session, manager: User, account: IGAccount, contact: Contact, reason: str) -> None:

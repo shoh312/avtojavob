@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Bot, CheckCircle2, Copy, KeyRound, Send, Sparkles, Trash2, UserPlus, UsersRound } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { Bot, CheckCircle2, Copy, FlaskConical, Handshake, KanbanSquare, KeyRound, Loader2, RotateCcw, Send, ShoppingBag, Sparkles, StickyNote, Trash2, UserPlus, UsersRound } from 'lucide-react'
 import { api, ApiError } from '../api'
+import { useAuth } from '../auth'
 import { useI18n, useTimeAgo, type TKey } from '../i18n'
 import { Avatar, Button, Empty, Modal, PageHeader, Spinner, Toggle, useToast } from '../components/ui'
 
@@ -9,10 +10,88 @@ type Member = { id: number; name: string; email: string; last_login_at: string |
 
 type AiManager = { id: number; name: string; instructions: string; followup_hours: number; take_all: boolean; assigned: number }
 
+type TestMsg = { role: 'user' | 'assistant'; content: string; stage_name?: string; note?: string; handoff?: boolean; products?: { id: number; name: string; price: string }[] }
+
+function AiTestChat({ name }: { name: string }) {
+  const { t } = useI18n()
+  const { account } = useAuth()
+  const [msgs, setMsgs] = useState<TestMsg[]>([])
+  const [text, setText] = useState('')
+  const [stage, setStage] = useState('')
+  const [stages, setStages] = useState<{ id: string; name: string }[]>([])
+  const [busy, setBusy] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (account) api.get<{ stages: { id: string; name: string }[] }>(`/api/crm/stages?account_id=${account.id}`).then(r => { setStages(r.stages); setStage(r.stages[0]?.id || '') }).catch(() => {})
+  }, [account])
+  useEffect(() => { box.current?.scrollTo({ top: box.current.scrollHeight, behavior: 'smooth' }) }, [msgs, busy])
+  const send = async (e?: FormEvent) => {
+    e?.preventDefault()
+    const v = text.trim()
+    if (!v || busy || !account) return
+    const next: TestMsg[] = [...msgs, { role: 'user', content: v }]
+    setMsgs(next); setText(''); setBusy(true)
+    try {
+      const r = await api.post<{ reply: string; stage: string | null; stage_name: string; note: string; handoff: boolean; products: { id: number; name: string; price: string }[] }>(
+        '/api/team/ai/test', { account_id: account.id, stage, messages: next.map(m => ({ role: m.role, content: m.content })) })
+      if (r.stage) setStage(r.stage)
+      setMsgs([...next, { role: 'assistant', content: r.reply || '…', stage_name: r.stage_name, note: r.note, handoff: r.handoff, products: r.products }])
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : ''
+      setMsgs([...next, { role: 'assistant', content: code === 'ai_unavailable' ? t('int.ai.unavailable') : t('common.error') }])
+    } finally { setBusy(false) }
+  }
+  const current = stages.find(s => s.id === stage)
+  return (
+    <div className="flex h-[480px] flex-col overflow-hidden rounded-2xl border border-line">
+      <div className="flex items-center gap-2 border-b border-line bg-soft/60 px-3 py-2 text-[12px] text-ink-3">
+        <KanbanSquare className="h-3.5 w-3.5" />{t('team.ai.t_stage')}
+        <span className="chip bg-white font-semibold text-ink-2">{current?.name || '—'}</span>
+        <span className="ml-auto">{t('team.ai.t_safe')}</span>
+        {msgs.length > 0 && <button onClick={() => { setMsgs([]); setStage(stages[0]?.id || '') }} title={t('team.ai.t_reset')} className="rounded-lg p-1 hover:bg-white hover:text-ink"><RotateCcw className="h-3.5 w-3.5" /></button>}
+      </div>
+      <div ref={box} className="scrollbar-thin flex-1 space-y-3 overflow-y-auto bg-white p-4">
+        {msgs.length === 0 && (
+          <div className="flex h-full flex-col items-center justify-center text-center text-[13px] text-ink-4">
+            <FlaskConical className="mb-2 h-6 w-6" />{t('team.ai.t_empty', { name })}
+            <div className="mt-3 flex flex-wrap justify-center gap-1.5">
+              {[t('team.ai.t_q1'), t('team.ai.t_q2'), t('team.ai.t_q3')].map(q => (
+                <button key={q} onClick={() => setText(q)} className="rounded-full border border-line px-3 py-1 text-[12px] text-ink-2 hover:bg-soft">{q}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        {msgs.map((m, i) => m.role === 'user' ? (
+          <div key={i} className="flex justify-end"><div className="max-w-[80%] whitespace-pre-wrap rounded-[18px] rounded-br-md bg-brand-600 px-3.5 py-2 text-[13px] text-white">{m.content}</div></div>
+        ) : (
+          <div key={i} className="flex items-start gap-2">
+            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#6d5dfc] to-[#e5161f] text-white"><Bot className="h-3.5 w-3.5" /></span>
+            <div className="max-w-[82%] space-y-1.5">
+              <div className="whitespace-pre-wrap rounded-[18px] rounded-tl-md bg-soft px-3.5 py-2 text-[13px]">{m.content}</div>
+              {m.products?.map(p => <div key={p.id} className="flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-[12px]"><ShoppingBag className="h-3.5 w-3.5 text-brand-600" /><b>{p.name}</b><span className="text-ink-3">{p.price}</span></div>)}
+              <div className="flex flex-wrap gap-1">
+                {m.stage_name && <span className="chip bg-violet-50 text-[11px] text-violet-700"><KanbanSquare className="mr-1 h-3 w-3" />→ {m.stage_name}</span>}
+                {m.note && <span className="chip bg-amber-50 text-[11px] text-amber-800"><StickyNote className="mr-1 h-3 w-3" />{m.note}</span>}
+                {m.handoff && <span className="chip bg-emerald-50 text-[11px] text-emerald-700"><Handshake className="mr-1 h-3 w-3" />{t('team.ai.t_handoff')}</span>}
+              </div>
+            </div>
+          </div>
+        ))}
+        {busy && <div className="flex items-center gap-2 text-[12px] text-ink-4"><Loader2 className="h-3.5 w-3.5 animate-spin" />{name}…</div>}
+      </div>
+      <form onSubmit={send} className="flex gap-2 border-t border-line p-2">
+        <input className="input flex-1" value={text} onChange={e => setText(e.target.value)} placeholder={t('team.ai.t_ph')} />
+        <Button type="submit" disabled={!text.trim() || busy}><Send className="h-4 w-4" /></Button>
+      </form>
+    </div>
+  )
+}
+
 function AiManagerCard({ ai, available, autoAssign, onChanged }: { ai: AiManager | null; available: boolean; autoAssign: boolean; onChanged: () => void }) {
   const { t } = useI18n()
   const toast = useToast()
   const [open, setOpen] = useState(false)
+  const [testOpen, setTestOpen] = useState(false)
   const [f, setF] = useState({ name: ai?.name || 'AI Menejer', instructions: ai?.instructions || '', followup_hours: ai?.followup_hours ?? 4, take_all: ai?.take_all ?? true })
   const [busy, setBusy] = useState(false)
   useEffect(() => { if (ai) setF({ name: ai.name, instructions: ai.instructions, followup_hours: ai.followup_hours, take_all: ai.take_all }) }, [ai])
@@ -43,10 +122,14 @@ function AiManagerCard({ ai, available, autoAssign, onChanged }: { ai: AiManager
           {!available && <p className="mt-2 text-[12.5px] text-amber-300">{t('int.ai.unavailable')}</p>}
         </div>
         <div className="flex gap-2">
+          {ai && available && <Button variant="secondary" onClick={() => setTestOpen(true)}><FlaskConical className="h-4 w-4" />{t('team.ai.test')}</Button>}
           <Button variant={ai ? 'secondary' : 'primary'} onClick={() => setOpen(true)}><Sparkles className="h-4 w-4" />{ai ? t('common.edit') : t('team.ai.add')}</Button>
           {ai && <button onClick={remove} className="rounded-xl p-2.5 text-white/60 hover:bg-white/10 hover:text-white"><Trash2 className="h-4 w-4" /></button>}
         </div>
       </div>
+      <Modal open={testOpen} onClose={() => setTestOpen(false)} title={`${t('team.ai.test')} · ${ai?.name || ''}`} wide>
+        {testOpen && <AiTestChat name={ai?.name || 'AI'} />}
+      </Modal>
       <Modal open={open} onClose={() => setOpen(false)} title={t('team.ai.title')} wide>
         <div className="space-y-4">
           <label className="block"><span className="label">{t('team.ai.name')}</span>

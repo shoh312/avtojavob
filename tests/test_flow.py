@@ -1008,6 +1008,16 @@ def test_ai_manager(client, monkeypatch):
     assert aimanager.run_followups() == 1 and calls[0][2] == {"text": "Savollaringiz qoldimi? 🙂"}
     assert aimanager.run_followups() == 0  # faqat bir marta
 
+    # sinov chati: hech narsa yuborilmaydi, bosqich faqat taklif sifatida qaytadi
+    monkeypatch.setattr(services, "ai_chat_json", lambda db, s, h: (json.dumps(
+        {"reply": f"Mana [[product:{product_id}]]", "stage": "contacted", "note": "Qiziqdi", "handoff": True}), None))
+    calls.clear()
+    r = client.post("/api/team/ai/test", json={"account_id": acc, "stage": "new",
+                                               "messages": [{"role": "user", "content": "Narxi?"}]}, headers=H).json()
+    assert r["reply"] == "Mana" and r["products"][0]["id"] == product_id and r["stage"] == "contacted"
+    assert r["note"] == "Qiziqdi" and r["handoff"] is True and calls == []
+    assert client.post("/api/team/ai/test", json={"account_id": acc, "messages": []}, headers=H).json()["error"] == "empty"
+
     # odamga topshirish (handoff)
     client.post("/api/team", json={"name": "Odam Menejer", "email": "human@shop.tj"}, headers=H)
     monkeypatch.setattr(services, "ai_chat_json", lambda db, s, h: (json.dumps(
