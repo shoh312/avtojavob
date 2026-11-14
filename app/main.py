@@ -30,6 +30,7 @@ from .config import settings
 from .db import get_db, init_db
 from .engine import contact_card as engine_contact_card
 from .engine import sync_history as engine_sync_history
+from .engine import broadcast_window
 from .engine import (broadcast_audience, log_event, process_payload, record_message, refresh_expiring_tokens,
                      resubscribe_all, run_broadcast, run_due_jobs, run_due_reminders)
 from .flows import (blank_graph, build_template, generate_system, list_templates, normalize_generated, trigger_of,
@@ -1339,9 +1340,23 @@ def inbox_pause(contact_id: int, body: dict = Body(...), user: User = Depends(cu
 
 # ---------------------------------------------------------------- rassilka
 
-def _broadcast_json(b: Broadcast) -> dict:
-    return {"id": b.id, "text": b.text, "tag": b.tag, "status": b.status, "total": b.total, "sent": b.sent,
-            "failed": b.failed, "buttons": json.loads(b.buttons_json or "[]"),
+def _broadcast_replies(db: Session, b: Broadcast) -> int:
+    """Rassilkadan keyin 3 kun ichida javob yozgan qabul qiluvchilar soni."""
+    end = (b.finished_at or utcnow()) + timedelta(minutes=1)
+    recipients = select(EventLog.contact_id).where(
+        EventLog.account_id == b.account_id, EventLog.kind == "broadcast",
+        EventLog.created_at >= b.created_at, EventLog.created_at <= end)
+    return db.scalar(select(func.count(func.distinct(Message.contact_id))).where(
+        Message.account_id == b.account_id, Message.direction == "in", Message.contact_id.in_(recipients),
+        Message.created_at > b.created_at, Message.created_at <= b.created_at + timedelta(days=3))) or 0
+
+
+def _broadcast_json(b: Broadcast, db: Session | None = None) -> dict:
+    replies = _broadcast_replies(db, b) if db is not None and b.sent else 0
+    return {"id": b.id, "text": b.text, "tag": b.tag, "stage": b.stage or "", "status": b.status, "total": b.total,
+            "sent": b.sent, "failed": b.failed, "replies": replies,
+            "reply_rate": round(replies * 100 / b.sent) if b.sent else 0,
+            "buttons": json.loads(b.buttons_json or "[]"),
             "created_at": iso(b.created_at), "finished_at": iso(b.finished_at)}
 
 
@@ -1349,14 +1364,34 @@ def _broadcast_json(b: Broadcast) -> dict:
 def broadcasts_list(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
     rows = db.scalars(select(Broadcast).where(Broadcast.account_id == acc.id).order_by(Broadcast.id.desc()).limit(50)).all()
-    return {"items": [_broadcast_json(b) for b in rows]}
+    items = [_broadcast_json(b, db) for b in rows]
+    since = utcnow() - timedelta(days=30)
+    recent = [i for b, i in zip(rows, items) if b.created_at >= since]
+    sent = sum(i["sent"] for i in recent)
+    replies = sum(i["replies"] for i in recent)
+    return {"items": items, "stats": {"count": len(recent), "sent": sent, "replies": replies,
+                                      "reply_rate": round(replies * 100 / sent) if sent else 0}}
 
 
 @app.get("/api/broadcasts/audience")
-def broadcasts_audience(account_id: int, tag: str = "", user: User = Depends(current_user), db: Session = Depends(get_db)):
+def broadcasts_audience(account_id: int, tag: str = "", stage: str = "", user: User = Depends(current_user),
+                        db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
-    return {"eligible": len(broadcast_audience(db, acc.id, tag.strip())),
-            "total": db.scalar(select(func.count(Contact.id)).where(Contact.account_id == acc.id)) or 0}
+    window = broadcast_window(db, acc.id)
+    tag, stage = tag.strip(), stage.strip()
+    tags: Counter = Counter()
+    stages: Counter = Counter()
+    soon = 0
+    closing = utcnow() - timedelta(hours=20)
+    for c in window:
+        tags.update(set(c.tags))
+        stages[c.stage or ""] += 1
+        if c.last_inbound_at and c.last_inbound_at < closing:
+            soon += 1
+    return {"eligible": len(broadcast_audience(db, acc.id, tag, stage)), "window": len(window), "closing_soon": soon,
+            "total": db.scalar(select(func.count(Contact.id)).where(Contact.account_id == acc.id)) or 0,
+            "tags": [{"tag": k, "n": n} for k, n in tags.most_common(30) if k],
+            "stages": [{**s, "n": stages.get(s["id"], 0)} for s in crm.get_stages(acc)]}
 
 
 @app.post("/api/broadcasts")
@@ -1380,10 +1415,11 @@ def broadcasts_create(body: dict = Body(...), user: User = Depends(current_user)
     if db.scalar(select(Broadcast).where(Broadcast.account_id == acc.id, Broadcast.status == "running")):
         err("broadcast_running")
     tag = str(body.get("tag") or "").strip()[:40]
-    audience = broadcast_audience(db, acc.id, tag)
+    stage = str(body.get("stage") or "").strip()[:40]
+    audience = broadcast_audience(db, acc.id, tag, stage)
     if not audience:
         err("no_audience")
-    b = Broadcast(account_id=acc.id, text=text, tag=tag, total=len(audience),
+    b = Broadcast(account_id=acc.id, text=text, tag=tag, stage=stage, total=len(audience),
                   buttons_json=json.dumps(buttons, ensure_ascii=False))
     db.add(b)
     db.commit()

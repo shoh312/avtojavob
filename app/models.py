@@ -317,6 +317,7 @@ class Broadcast(Base):
     text: Mapped[str] = mapped_column(Text, default="")
     buttons_json: Mapped[str] = mapped_column(Text, default="[]")
     tag: Mapped[str] = mapped_column(String(40), default="")
+    stage: Mapped[str] = mapped_column(String(40), default="")  # CRM bosqichi bo'yicha filtr
     status: Mapped[str] = mapped_column(String(20), default="running")  # running | done | limited | interrupted
     total: Mapped[int] = mapped_column(Integer, default=0)
     sent: Mapped[int] = mapped_column(Integer, default=0)

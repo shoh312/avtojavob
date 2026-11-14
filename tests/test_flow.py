@@ -481,6 +481,11 @@ def test_broadcast(client):
     assert calls and calls[0][2]["attachment"]["payload"]["text"] == "Aksiya @mijoz!"
     items = client.get(f"/api/broadcasts?account_id={S['acc']}").json()["items"]
     assert items[0]["status"] == "done" and items[0]["sent"] == aud["eligible"]
+    assert "replies" in items[0] and "stats" in client.get(f"/api/broadcasts?account_id={S['acc']}").json()
+    aud2 = client.get(f"/api/broadcasts/audience?account_id={S['acc']}").json()
+    assert aud2["window"] >= aud2["eligible"] and isinstance(aud2["tags"], list) and aud2["stages"]
+    none = client.get(f"/api/broadcasts/audience?account_id={S['acc']}&stage=no-such-stage").json()
+    assert none["eligible"] == 0
 
 
 def test_password_reset_and_verify(client, monkeypatch):

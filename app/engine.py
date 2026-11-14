@@ -804,7 +804,7 @@ def run_broadcast(broadcast_id: int) -> None:
         token = decrypt(account.access_token_enc)
         buttons = [ig.url_button(x["title"], x["url"]) for x in _json.loads(b.buttons_json or "[]")]
         message = ig.build_message(b.text, buttons)
-        for contact in broadcast_audience(db, account.id, b.tag):
+        for contact in broadcast_audience(db, account.id, b.tag, b.stage or ""):
             if sends_last_hour(db, account.id) >= settings.HOURLY_SEND_LIMIT:
                 b.status = "limited"
                 break
@@ -835,10 +835,15 @@ def run_broadcast(broadcast_id: int) -> None:
         db.close()
 
 
-def broadcast_audience(db: Session, account_id: int, tag: str = "") -> list[Contact]:
+def broadcast_window(db: Session, account_id: int) -> list[Contact]:
+    """Instagram 24 soat qoidasi: oxirgi 23.5 soatda yozganlar."""
     since = utcnow() - timedelta(hours=23, minutes=30)
-    rows = db.scalars(select(Contact).where(Contact.account_id == account_id, Contact.last_inbound_at >= since)).all()
-    return [c for c in rows if not tag or tag in c.tags]
+    return db.scalars(select(Contact).where(Contact.account_id == account_id, Contact.last_inbound_at >= since)).all()
+
+
+def broadcast_audience(db: Session, account_id: int, tag: str = "", stage: str = "") -> list[Contact]:
+    return [c for c in broadcast_window(db, account_id)
+            if (not tag or tag in c.tags) and (not stage or (c.stage or "") == stage)]
 
 
 def process_payload(payload: dict) -> None:
