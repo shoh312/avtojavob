@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowRight, BadgeCheck, Camera, Check, CreditCard, Eye, EyeOff, Globe2, KeyRound, Loader2, LogOut, MailWarning, ShieldCheck, Trash2, UserRound } from 'lucide-react'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth'
@@ -21,7 +21,7 @@ const HELLO: Record<Lang, string> = { uz: 'Salom!', ru: 'Привет!', tj: 'С
 
 function Card({ id, icon, title, sub, children }: { id: string; icon: ReactNode; title: string; sub?: string; children: ReactNode }) {
   return (
-    <section id={id} className="scroll-mt-6 rounded-3xl border border-line bg-white p-6">
+    <section id={id} className="animate-fade-up rounded-3xl border border-line bg-white p-6">
       <div className="mb-5 flex items-start gap-3">
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-soft text-ink-2">{icon}</span>
         <div><h2 className="text-[16px] font-bold leading-tight">{title}</h2>{sub && <p className="mt-0.5 text-[12.5px] text-ink-3">{sub}</p>}</div>
@@ -61,19 +61,13 @@ export default function Settings() {
   const [name, setName] = useState(user?.name || '')
   const [pw, setPw] = useState({ password: '', new_password: '' })
   const [busy, setBusy] = useState('')
-  const [active, setActive] = useState<string>('profile')
+  const [params, setParams] = useSearchParams()
+  const sections = SECTIONS.filter(s => !(s.id === 'plan' && user?.role === 'manager'))
+  const active = sections.some(s => s.id === params.get('tab')) ? params.get('tab')! : 'profile'
+  const open = (id: string) => setParams(id === 'profile' ? {} : { tab: id }, { replace: true })
   const file = useRef<HTMLInputElement>(null)
 
   useEffect(() => { setName(user?.name || '') }, [user?.name])
-  useEffect(() => {
-    const els = SECTIONS.map(s => document.getElementById(s.id)).filter(Boolean) as HTMLElement[]
-    const io = new IntersectionObserver(es => {
-      const v = es.filter(e => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0]
-      if (v) setActive(v.target.id)
-    }, { rootMargin: '-10% 0px -60% 0px' })
-    els.forEach(e => io.observe(e))
-    return () => io.disconnect()
-  }, [])
   if (!user) return null
 
   const fail = (e: unknown) => toast(e instanceof ApiError ? t(`err.${e.code}` as TKey) : t('common.error'), 'error')
@@ -135,19 +129,20 @@ export default function Settings() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[210px_1fr]">
-        {/* bo'limlar */}
-        <nav className="hidden lg:block">
-          <div className="sticky top-6 space-y-0.5">
-            {SECTIONS.map(s => (
-              <a key={s.id} href={`#${s.id}`} onClick={e => { e.preventDefault(); document.getElementById(s.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}
-                className={`flex items-center gap-2.5 rounded-xl px-3 py-2 text-[13.5px] font-medium transition ${active === s.id ? 'bg-ink text-white' : 'text-ink-2 hover:bg-soft'}`}>
+        {/* bo'limlar: faqat tanlangani ko'rinadi */}
+        <nav className="-mx-1 overflow-x-auto px-1 lg:mx-0 lg:overflow-visible lg:px-0">
+          <div className="flex gap-1 lg:sticky lg:top-6 lg:flex-col lg:gap-0.5">
+            {sections.map(s => (
+              <button key={s.id} onClick={() => open(s.id)}
+                className={`flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2 text-left text-[13.5px] font-medium transition ${active === s.id ? 'bg-ink text-white' : 'text-ink-2 hover:bg-soft'}`}>
                 <s.icon className="h-4 w-4" />{t(s.label as TKey)}
-              </a>
+              </button>
             ))}
           </div>
         </nav>
 
         <div className="max-w-2xl space-y-5">
+          {active === 'profile' && (
           <Card id="profile" icon={<UserRound className="h-4 w-4" />} title={t('set.profile')} sub={t('set2.profile_d')}>
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block"><span className="label">{t('auth.name')}</span>
@@ -166,7 +161,9 @@ export default function Settings() {
               <Button onClick={saveName} disabled={name.trim() === (user.name || '')} loading={busy === 'name'}>{t('common.save')}</Button>
             </div>
           </Card>
+          )}
 
+          {active === 'language' && (
           <Card id="language" icon={<Globe2 className="h-4 w-4" />} title={t('set.language')} sub={t('set2.lang_d')}>
             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
               {LANGS.map(l => {
@@ -183,7 +180,9 @@ export default function Settings() {
               })}
             </div>
           </Card>
+          )}
 
+          {active === 'security' && (
           <Card id="security" icon={<ShieldCheck className="h-4 w-4" />} title={t('set2.security')} sub={t('set2.security_d')}>
             {user.google && (
               <div className="mb-4 flex items-center gap-2.5 rounded-2xl border border-line px-4 py-3 text-[13px]">
@@ -210,8 +209,9 @@ export default function Settings() {
               <Button onClick={savePw} disabled={!pw.password || pw.new_password.length < 8} loading={busy === 'pw'}>{t('set2.pw_change')}</Button>
             </div>
           </Card>
+          )}
 
-          {user.role !== 'manager' && (
+          {user.role !== 'manager' && active === 'plan' && (
             <Card id="plan" icon={<CreditCard className="h-4 w-4" />} title={t('set2.plan')} sub={t('set2.plan_d')}>
               <div className="flex flex-col gap-4 rounded-2xl bg-gradient-to-br from-[#1b1b22] to-[#2a1530] p-5 text-white sm:flex-row sm:items-center">
                 <div className="flex-1">
@@ -233,11 +233,13 @@ export default function Settings() {
             </Card>
           )}
 
+          {active === 'account' && (
           <Card id="account" icon={<LogOut className="h-4 w-4" />} title={t('set2.account')} sub={t('set2.account_d')}>
             <button onClick={logout} className="inline-flex h-10 items-center gap-2 rounded-xl border border-brand-200 px-4 text-[13.5px] font-semibold text-brand-700 transition hover:bg-brand-50">
               <LogOut className="h-4 w-4" />{t('nav.logout')}
             </button>
           </Card>
+          )}
         </div>
       </div>
     </>
