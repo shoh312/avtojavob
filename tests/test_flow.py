@@ -389,7 +389,8 @@ def test_inbox_and_agent_reply(client):
     calls.clear()
     r = client.post(f"/api/inbox/{conv['id']}/send", json={"text": "Operator javobi"}, headers=H).json()
     assert calls == [("dm", "999", {"text": "Operator javobi"})]
-    assert r["contact"]["bot_paused"] and r["messages"][-1]["source"] == "agent"
+    assert r["contact"]["bot_paused"] and r["messages"][-1]["source"] == "agent" and r["messages"][-1]["author"]["name"]
+    assert r["contact"]["window_left_h"] is not None
 
     # bot pauzada — ssenariy ishlamaydi, lekin xabar tarixga yoziladi
     calls.clear()
@@ -1298,3 +1299,15 @@ def test_products_stats_and_reorder(client):
     assert names.index("Beta") < names.index("Alfa")
     client.delete(f"/api/products/{a['id']}", headers=H)
     client.delete(f"/api/products/{b['id']}", headers=H)
+
+
+def test_inbox_tabs_and_quick_replies(client):
+    acc = S["acc"]
+    d = client.get(f"/api/inbox?account_id={acc}&tab=unread").json()
+    assert set(d["counts"]) == {"all", "unread", "mine", "human"} and d["counts"]["all"] >= d["counts"]["unread"]
+    assert all(c["unread"] > 0 for c in d["items"])
+    assert all(c["bot_paused"] for c in client.get(f"/api/inbox?account_id={acc}&tab=human").json()["items"])
+    r = client.put(f"/api/accounts/{acc}/quick-replies", json={"items": [
+        {"title": "Narx", "text": "Narxlar katalogda"}, {"title": "", "text": "Salom!"}, {"title": "bo'sh", "text": ""}]}, headers=H).json()
+    assert [x["title"] for x in r["items"]] == ["Narx", "Salom!"]
+    assert client.get(f"/api/accounts/{acc}/quick-replies").json()["items"][0]["text"] == "Narxlar katalogda"

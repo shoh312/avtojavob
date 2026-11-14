@@ -89,6 +89,7 @@ class IGAccount(Base):
     tg_notify_leads: Mapped[bool] = mapped_column(Boolean, default=True)
     tg_notify_inbox: Mapped[bool] = mapped_column(Boolean, default=False)
     tg_notify_all: Mapped[bool] = mapped_column(Boolean, default=False)
+    quick_replies_json: Mapped[str] = mapped_column(Text, default="[]")  # chatdagi tayyor javoblar
     tg_secret: Mapped[str] = mapped_column(String(64), default="")
     tg_bot_username: Mapped[str] = mapped_column(String(64), default="")
     # CRM bosqichlari (bo'sh — standart bosqichlar egasining tilida)
@@ -309,6 +310,7 @@ class Message(Base):
     direction: Mapped[str] = mapped_column(String(4))  # in | out
     # user | comment | button | story | flow | ai | agent | broadcast
     source: Mapped[str] = mapped_column(String(20), default="user")
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # jamoadan kim yozgan (agent)
     text: Mapped[str] = mapped_column(Text, default="")
     ext_id: Mapped[str] = mapped_column(String(64), default="", index=True)  # Instagram mid xeshi
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

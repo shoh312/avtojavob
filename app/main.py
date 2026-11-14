@@ -1325,20 +1325,41 @@ def _owned_contact(db: Session, user: User, contact_id: int) -> Contact:
 
 
 def _conv_json(c: Contact) -> dict:
+    left = None
+    if c.can_message():
+        left = max(0, round(24 - (utcnow() - c.last_inbound_at).total_seconds() / 3600, 1))
     return {**contact_json(c), "preview": c.last_message_preview, "last_message_at": iso(c.last_message_at),
             "unread": c.unread or 0, "bot_paused": c.bot_paused(), "bot_paused_until": iso(c.bot_paused_until),
-            "can_message": c.can_message()}
+            "can_message": c.can_message(), "window_left_h": left}
+
+
+INBOX_TABS = ("all", "unread", "mine", "human")
+
+
+def _inbox_filter(stmt, tab: str, user: User):
+    if tab == "unread":
+        return stmt.where(Contact.unread > 0)
+    if tab == "mine":
+        return stmt.where(Contact.assigned_to == user.id)
+    if tab == "human":
+        return stmt.where(Contact.bot_paused_until > utcnow())
+    return stmt
 
 
 @app.get("/api/inbox")
-def inbox_list(account_id: int, q: str = "", user: User = Depends(current_user), db: Session = Depends(get_db)):
+def inbox_list(account_id: int, q: str = "", tab: str = "all", user: User = Depends(current_user),
+               db: Session = Depends(get_db)):
     acc = owned_account(db, user, account_id)
-    stmt = select(Contact).where(Contact.account_id == acc.id, Contact.last_message_at.is_not(None))
+    base = select(Contact).where(Contact.account_id == acc.id, Contact.last_message_at.is_not(None))
     if q.strip():
         like = f"%{q.strip().lower()}%"
-        stmt = stmt.where(or_(func.lower(Contact.username).like(like), func.lower(Contact.name).like(like)))
+        base = base.where(or_(func.lower(Contact.username).like(like), func.lower(Contact.name).like(like),
+                              func.lower(Contact.last_message_preview).like(like)))
+    stmt = _inbox_filter(base, tab if tab in INBOX_TABS else "all", user)
     rows = db.scalars(stmt.order_by(Contact.last_message_at.desc()).limit(100)).all()
-    return {"items": [_conv_json(c) for c in rows],
+    counts = {k: db.scalar(select(func.count()).select_from(_inbox_filter(base, k, user).subquery())) or 0
+              for k in INBOX_TABS}
+    return {"items": [_conv_json(c) for c in rows], "counts": counts,
             "unread": db.scalar(select(func.coalesce(func.sum(Contact.unread), 0)).where(Contact.account_id == acc.id)) or 0}
 
 
@@ -1352,9 +1373,14 @@ def inbox_thread(contact_id: int, user: User = Depends(current_user), db: Sessio
     if c.unread:
         c.unread = 0
         db.commit()
+    authors = {u.id: u for u in db.scalars(select(User).where(User.id.in_({m.user_id for m in msgs if m.user_id})))}
+
+    def author(m):
+        u = authors.get(m.user_id) if m.user_id else None
+        return {"name": u.name or u.email.split("@")[0], "avatar_url": avatar_url(u)} if u else None
     return {"contact": _conv_json(c),
             "messages": [{"id": m.id, "direction": m.direction, "source": m.source, "text": m.text,
-                          "created_at": iso(m.created_at)} for m in reversed(msgs)]}
+                          "created_at": iso(m.created_at), "author": author(m)} for m in reversed(msgs)]}
 
 
 @app.post("/api/inbox/{contact_id}/sync")
@@ -1380,12 +1406,36 @@ def inbox_send(contact_id: int, body: dict = Body(...), user: User = Depends(cur
         err(f"ig:{e}"[:200])
     log_event(db, c.account, c, "agent_reply", "", text)
     record_message(db, c.account_id, c, "out", text, "agent")
+    last = db.scalar(select(Message).where(Message.contact_id == c.id).order_by(Message.id.desc()).limit(1))
+    if last and last.source == "agent":
+        last.user_id = user.id
+        db.commit()
     if body.get("pause", True):
         until = utcnow() + timedelta(minutes=60)
         if not c.bot_paused_until or c.bot_paused_until < until:
             c.bot_paused_until = until
         db.commit()
     return inbox_thread(contact_id, user, db)
+
+
+@app.get("/api/accounts/{account_id}/quick-replies")
+def quick_replies_get(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    return {"items": json.loads(acc.quick_replies_json or "[]")}
+
+
+@app.put("/api/accounts/{account_id}/quick-replies")
+def quick_replies_save(account_id: int, body: dict = Body(...), user: User = Depends(current_user),
+                       db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    items = []
+    for r in (body.get("items") or [])[:30]:
+        title, text = str((r or {}).get("title") or "").strip()[:40], str((r or {}).get("text") or "").strip()[:1000]
+        if text:
+            items.append({"title": title or text[:24], "text": text})
+    acc.quick_replies_json = json.dumps(items, ensure_ascii=False)
+    db.commit()
+    return {"items": items}
 
 
 @app.post("/api/inbox/{contact_id}/pause")
