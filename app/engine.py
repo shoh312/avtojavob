@@ -761,9 +761,7 @@ def handle_messaging(db: Session, account: IGAccount, event: dict) -> None:
     if not flow:
         # Hech bir ssenariy mos kelmadi: AI yordamchi yoki operatorga xabarnoma
         if kind == "dm" and text and mark_processed(db, f"m:{mid}"):
-            if aimanager.reply(db, account, contact, text):
-                return
-            if not (account.ai_enabled and ai_answer(db, account, contact, text)):
+            if not aimanager.reply(db, account, contact, text):
                 if account.tg_notify_inbox and account.tg_chat_id and not account.tg_notify_all:
                     notify_telegram(db, account, contact_card(contact, "💬 Direct", f"“{text[:500]}”"), contact)
         return
@@ -771,38 +769,6 @@ def handle_messaging(db: Session, account: IGAccount, event: dict) -> None:
         return
     ctx = make_ctx(db, account, contact, flow, incoming=text or f"[{kind}]")
     start_flow(ctx, trig)
-
-
-def ai_answer(db: Session, account: IGAccount, contact: Contact, text: str) -> bool:
-    if not services.ai_available(db):
-        return False
-    if sends_last_hour(db, account.id) >= settings.HOURLY_SEND_LIMIT:
-        log_event(db, account, contact, "skipped", text, "limit")
-        return False
-    rows = db.scalars(select(Message).where(Message.contact_id == contact.id, Message.source != "comment")
-                      .order_by(Message.id.desc()).limit(12)).all()
-    history = [{"role": "user" if m.direction == "in" else "assistant", "content": m.text or "…"} for m in reversed(rows)]
-    leads = "off" if not account.ai_collect_leads else ("done" if contact.fields.get("phone") else "ask")
-    products = catalog.active_products(db, account.id)
-    answer = services.ai_reply(db, account.ai_prompt, history, leads, catalog.catalog_text(products))
-    if not answer:
-        log_event(db, account, contact, "skipped", text, "ai_no_answer")
-        return False
-    answer, ids = catalog.split_tags(answer)
-    chosen = [p for pid in ids for p in products if p.id == pid]
-    token = decrypt(account.access_token_enc)
-    try:
-        if answer:
-            ig.send_dm(token, contact.igsid, {"text": answer})
-        if chosen:
-            ig.send_dm(token, contact.igsid, catalog.product_cards(account, chosen, contact_lang(db, contact)))
-    except ig.IGError as e:
-        log_event(db, account, contact, "error", text, f"ai_reply → {e}")
-        return False
-    cards = ("  🛍 " + ", ".join(p.name for p in chosen)) if chosen else ""
-    log_event(db, account, contact, "ai_reply", text, answer + cards)
-    record_message(db, account.id, contact, "out", (answer + cards).strip(), "ai")
-    return True
 
 
 def handle_order(db: Session, account: IGAccount, contact: Contact, product_id: int) -> None:

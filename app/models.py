@@ -77,6 +77,10 @@ class IGAccount(Base):
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     ai_prompt: Mapped[str] = mapped_column(Text, default="")
     ai_collect_leads: Mapped[bool] = mapped_column(Boolean, default=True)
+    ai_name: Mapped[str] = mapped_column(String(80), default="")          # AI sotuvchi ismi
+    ai_crm: Mapped[bool] = mapped_column(Boolean, default=True)           # bosqich surish + izoh
+    ai_handoff: Mapped[bool] = mapped_column(Boolean, default=True)       # odamga topshirish
+    ai_followup_hours: Mapped[int] = mapped_column(Integer, default=0)    # jim mijozga eslatma (0 — o'chiq)
     # Telegram xabarnomalar (foydalanuvchining o'z boti)
     tg_bot_token_enc: Mapped[str] = mapped_column(Text, default="")
     tg_chat_id: Mapped[str] = mapped_column(String(64), default="")

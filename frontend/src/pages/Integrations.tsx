@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { ArrowRight, Bot, CheckCircle2, ExternalLink, FileSpreadsheet, Instagram, Lock, MessageCircle, Send, ShoppingBag, Sparkles, Webhook, Workflow, X, Zap } from 'lucide-react'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth'
@@ -7,29 +7,27 @@ import { useI18n, type TKey } from '../i18n'
 import { Avatar, Button, Spinner, Toggle, useToast } from '../components/ui'
 import { LogoMark } from '../components/Logo'
 import { Onboarding } from './Home'
-import { ProductCard, type Product } from './Products'
+import { AiSalesPanel, type AiSettings } from './AiSales'
 
-type Integ = {
-  ai_enabled: boolean; ai_prompt: string; ai_available: boolean; ai_collect_leads: boolean
+type Integ = AiSettings & {
   telegram: { connected: boolean; chat: string; two_way: boolean; bot: string }
   tg_notify_leads: boolean; tg_notify_inbox: boolean; tg_notify_all: boolean
   instagram: { username: string; active: boolean; picture_url: string }
-  ai_manager: boolean; products: number; webhook_flows: { id: number; name: string }[]
+  products: number; webhook_flows: { id: number; name: string }[]
 }
-type Key = 'instagram' | 'ai' | 'telegram' | 'aimgr' | 'webhook' | 'catalog'
+type Key = 'instagram' | 'ai' | 'telegram' | 'webhook' | 'catalog'
 type State = 'on' | 'off' | 'setup'
 
 const META: Record<Key, { icon: typeof Bot; bg: string; title: TKey; what: TKey }> = {
   instagram: { icon: Instagram, bg: 'bg-gradient-to-br from-[#f58529] via-[#dd2a7b] to-[#8134af]', title: 'int2.ig.t', what: 'int2.ig.w' },
-  ai: { icon: Sparkles, bg: 'bg-gradient-to-br from-[#6d5dfc] to-[#a855f7]', title: 'int.ai.title', what: 'int2.ai.w' },
+  ai: { icon: Sparkles, bg: 'bg-gradient-to-br from-[#6d5dfc] to-[#e5161f]', title: 'ai3.title', what: 'ai3.w' },
   telegram: { icon: Send, bg: 'bg-[#229ED9]', title: 'int.tg.title', what: 'int2.tg.w' },
-  aimgr: { icon: Bot, bg: 'bg-gradient-to-br from-[#1b1b22] to-[#e5161f]', title: 'team.ai.title', what: 'int2.mgr.w' },
   webhook: { icon: Webhook, bg: 'bg-ink', title: 'int.wh.title', what: 'int2.wh.w' },
   catalog: { icon: ShoppingBag, bg: 'bg-emerald-500', title: 'nav.products', what: 'int2.cat.w' },
 }
 // Xaritadagi joylashuv (foizda)
 const POS: Record<Key, [number, number]> = {
-  instagram: [12, 50], ai: [31, 14], telegram: [69, 14], aimgr: [88, 50], webhook: [69, 86], catalog: [31, 86],
+  instagram: [12, 50], ai: [33, 14], telegram: [67, 14], webhook: [88, 50], catalog: [50, 86],
 }
 
 function StatusPill({ s }: { s: State }) {
@@ -42,7 +40,7 @@ function StatusPill({ s }: { s: State }) {
   )
 }
 
-function Drawer({ k, onClose, children, footer }: { k: Key; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
+function Drawer({ k, onClose, children, footer, wide }: { k: Key; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
   const { t } = useI18n()
   const m = META[k]
   useEffect(() => {
@@ -52,7 +50,7 @@ function Drawer({ k, onClose, children, footer }: { k: Key; onClose: () => void;
   }, [onClose])
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-ink/20 backdrop-blur-[2px]" onMouseDown={onClose}>
-      <aside onMouseDown={e => e.stopPropagation()} className="flex h-full w-full max-w-[540px] animate-fade-up flex-col bg-white shadow-pop">
+      <aside onMouseDown={e => e.stopPropagation()} className={`flex h-full w-full animate-fade-up flex-col bg-white text-ink shadow-pop ${wide ? 'max-w-[620px]' : 'max-w-[540px]'}`}>
         <div className="flex items-center gap-3 border-b border-line px-6 py-4">
           <span className={`grid h-10 w-10 place-items-center rounded-xl text-white ${m.bg}`}><m.icon className="h-5 w-5" /></span>
           <div className="min-w-0 flex-1">
@@ -76,26 +74,21 @@ function StepTitle({ n, children }: { n: number; children: ReactNode }) {
   )
 }
 
-const SNIPPETS = ['hours', 'delivery', 'payment', 'address', 'returns'] as const
-
 export default function Integrations() {
   const { t } = useI18n()
   const toast = useToast()
   const { account } = useAuth()
   const [d, setD] = useState<Integ | null>(null)
-  const [open, setOpen] = useState<Key | null>(null)
-  const [prompt, setPrompt] = useState('')
+  const [params] = useSearchParams()
+  const [open, setOpen] = useState<Key | null>(() => (['instagram', 'ai', 'telegram', 'webhook', 'catalog'].includes(params.get('open') || '') ? params.get('open') as Key : null))
   const [token, setToken] = useState('')
-  const [question, setQuestion] = useState('')
-  const [chat, setChat] = useState<{ q: string; a: string; cards: Product[] }[]>([])
   const [busy, setBusy] = useState('')
-  const chatEnd = useRef<HTMLDivElement>(null)
+  const [aiDirty, setAiDirty] = useState<{ name: string; prompt: string } | null>(null)
 
   useEffect(() => {
     if (!account) return
-    api.get<Integ>(`/api/accounts/${account.id}/integrations`).then(r => { setD(r); setPrompt(r.ai_prompt) }).catch(() => {})
+    api.get<Integ>(`/api/accounts/${account.id}/integrations`).then(setD).catch(() => {})
   }, [account])
-  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [chat])
   if (!account) return <Onboarding />
   if (!d) return <Spinner />
 
@@ -108,17 +101,11 @@ export default function Integrations() {
     try { setD(await api.put<Integ>(`${base}/integrations`, patch)) } catch (e) { fail(e) }
   }
   const run = async (key: string, fn: () => Promise<void>) => { setBusy(key); try { await fn() } catch (e) { fail(e) } finally { setBusy('') } }
-  const ask = () => run('ai', async () => {
-    const q = question.trim()
-    const r = await api.post<{ answer: string; products: Product[] }>(`${base}/ai/test`, { message: q, prompt, collect_leads: d.ai_collect_leads })
-    setChat(c => [...c, { q, a: r.answer, cards: r.products || [] }]); setQuestion('')
-  })
 
   const state: Record<Key, State> = {
     instagram: d.instagram.active ? 'on' : 'setup',
     ai: !d.ai_available ? 'setup' : d.ai_enabled ? 'on' : 'off',
     telegram: d.telegram.connected ? 'on' : 'setup',
-    aimgr: d.ai_manager ? 'on' : 'off',
     webhook: d.webhook_flows.length ? 'on' : 'off',
     catalog: d.products ? 'on' : 'setup',
   }
@@ -126,9 +113,8 @@ export default function Integrations() {
   const onCount = keys.filter(k => state[k] === 'on').length
   const detail: Record<Key, string> = {
     instagram: `@${d.instagram.username}`,
-    ai: d.ai_enabled ? (d.ai_collect_leads ? t('int2.ai.d_leads') : t('int2.ai.d_on')) : t('int2.ai.d_off'),
+    ai: d.ai_enabled ? `${d.ai_name || 'AI'} · ${t('int2.ai.d_on')}` : t('int2.ai.d_off'),
     telegram: d.telegram.connected ? (d.telegram.bot ? `@${d.telegram.bot}` : d.telegram.chat) : t('int2.tg.d_off'),
-    aimgr: d.ai_manager ? t('int2.mgr.d_on') : t('int2.mgr.d_off'),
     webhook: d.webhook_flows.length ? t('int2.wh.d_on', { n: d.webhook_flows.length }) : t('int2.wh.d_off'),
     catalog: d.products ? t('int2.cat.d_on', { n: d.products }) : t('int2.cat.d_off'),
   }
@@ -214,54 +200,13 @@ export default function Integrations() {
 
       {/* ---------------- panellar ---------------- */}
       {open === 'ai' && (
-        <Drawer k="ai" onClose={() => setOpen(null)} footer={
+        <Drawer k="ai" wide onClose={() => { if (!aiDirty || confirm(t('ai3.leave'))) { setOpen(null); setAiDirty(null) } }} footer={
           <div className="flex items-center justify-between gap-3">
-            <span className="text-[12px] text-ink-4">{prompt === d.ai_prompt ? t('int2.saved_state') : t('ed.unsaved')}</span>
-            <Button disabled={prompt === d.ai_prompt} onClick={() => save({ ai_prompt: prompt }).then(() => toast(t('common.saved')))}>{t('common.save')}</Button>
+            <span className="text-[12px] text-ink-4">{aiDirty ? t('ed.unsaved') : t('int2.saved_state')}</span>
+            <Button disabled={!aiDirty} loading={busy === 'aisave'}
+              onClick={() => aiDirty && run('aisave', async () => { await save({ ai_name: aiDirty.name, ai_prompt: aiDirty.prompt }); toast(t('common.saved')) })}>{t('common.save')}</Button>
           </div>}>
-          {!d.ai_available && <div className="mb-5 rounded-2xl bg-amber-50 px-4 py-3 text-[13px] text-amber-800">{t('int.ai.unavailable')}</div>}
-          <label className={`mb-6 flex items-center justify-between gap-4 rounded-2xl p-4 transition ${d.ai_enabled ? 'bg-gradient-to-r from-[#f3f0ff] to-white ring-1 ring-violet-200' : 'bg-soft'}`}>
-            <span><span className="block text-[15px] font-bold">{d.ai_enabled ? t('int2.ai.on_t') : t('int2.ai.off_t')}</span>
-              <span className="mt-0.5 block text-[12.5px] text-ink-3">{t('int.ai.desc')}</span></span>
-            <Toggle checked={d.ai_enabled} onChange={v => save({ ai_enabled: v })} />
-          </label>
-
-          <StepTitle n={1}>{t('int2.ai.s1')}</StepTitle>
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {SNIPPETS.map(sn => (
-              <button key={sn} type="button" onClick={() => setPrompt(p => `${p.trim()}${p.trim() ? '\n' : ''}${t(`int2.sn.${sn}` as TKey)}`)}
-                className="rounded-full bg-soft px-2.5 py-1 text-[12px] font-medium text-ink-2 hover:bg-[#e9e9ee]">+ {t(`int2.snl.${sn}` as TKey)}</button>
-            ))}
-          </div>
-          <textarea rows={9} className="input resize-y text-[13.5px] leading-relaxed" maxLength={8000} value={prompt} placeholder={t('int.ai.prompt_ph')} onChange={e => setPrompt(e.target.value)} />
-          <div className="mb-6 mt-1 flex justify-between text-[11.5px] text-ink-4"><span>{t('int.ai.hint')}</span><span className="tabular-nums">{prompt.length}/8000</span></div>
-
-          <StepTitle n={2}>{t('int2.ai.s2')}</StepTitle>
-          <label className="mb-6 flex items-start justify-between gap-4 rounded-2xl border border-line px-4 py-3">
-            <span><span className="block text-[14px] font-semibold">{t('int.ai.leads')}</span>
-              <span className="block text-[12.5px] text-ink-3">{t('int.ai.leads_d')}</span></span>
-            <Toggle checked={d.ai_collect_leads} onChange={v => save({ ai_collect_leads: v })} />
-          </label>
-
-          <StepTitle n={3}>{t('int2.ai.s3')}</StepTitle>
-          <div className="rounded-2xl bg-soft p-3">
-            <div className="scrollbar-thin max-h-[300px] space-y-2 overflow-y-auto">
-              {chat.length === 0 && <p className="py-6 text-center text-[12.5px] text-ink-4">{t('int2.ai.try')}</p>}
-              {chat.map((m, i) => (
-                <div key={i} className="space-y-1.5">
-                  <div className="flex justify-end"><div className="max-w-[80%] rounded-2xl rounded-br-md bg-ink px-3 py-2 text-[13.5px] text-white">{m.q}</div></div>
-                  <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-bl-md bg-white px-3 py-2 text-[13.5px] shadow-card">{m.a}</div>
-                  {m.cards.length > 0 && <div className="scrollbar-thin flex gap-2 overflow-x-auto pb-1">{m.cards.map(p => <ProductCard key={p.id} p={p} compact />)}</div>}
-                </div>
-              ))}
-              <div ref={chatEnd} />
-            </div>
-            <form onSubmit={e => { e.preventDefault(); if (question.trim()) ask() }} className="mt-2 flex gap-2">
-              <input className="input h-10 flex-1 bg-white" value={question} placeholder={t('int.ai.test_ph')} onChange={e => setQuestion(e.target.value)} />
-              <Button variant="dark" loading={busy === 'ai'} disabled={!question.trim() || !d.ai_available}><Send className="h-4 w-4" /></Button>
-            </form>
-            {chat.length > 0 && <button onClick={() => setChat([])} className="mt-2 text-[12px] font-medium text-ink-3 hover:text-ink">{t('sim.reset')}</button>}
-          </div>
+          <AiSalesPanel accountId={account.id} s={d} save={save} onDirty={setAiDirty} />
         </Drawer>
       )}
 
@@ -342,7 +287,7 @@ export default function Integrations() {
         </Drawer>
       )}
 
-      {(open === 'instagram' || open === 'aimgr' || open === 'catalog') && (
+      {(open === 'instagram' || open === 'catalog') && (
         <Drawer k={open} onClose={() => setOpen(null)}>
           {open === 'instagram' && (
             <div className="flex items-center gap-3 rounded-2xl border border-line p-4">
@@ -350,10 +295,10 @@ export default function Integrations() {
               <div className="flex-1"><div className="text-[15px] font-bold">@{d.instagram.username}</div><StatusPill s={state.instagram} /></div>
             </div>
           )}
-          <p className="my-5 text-[13.5px] leading-relaxed text-ink-2">{t(open === 'instagram' ? 'int2.ig.long' : open === 'aimgr' ? 'team.ai.sub' : 'int2.cat.long')}</p>
-          <Link to={open === 'instagram' ? '/app/accounts' : open === 'aimgr' ? '/app/team' : '/app/products'}
+          <p className="my-5 text-[13.5px] leading-relaxed text-ink-2">{t(open === 'instagram' ? 'int2.ig.long' : 'int2.cat.long')}</p>
+          <Link to={open === 'instagram' ? '/app/accounts' : '/app/products'}
             className="inline-flex h-11 items-center gap-2 rounded-xl bg-ink px-5 text-[14px] font-semibold text-white hover:bg-black">
-            {t(open === 'instagram' ? 'int2.ig.go' : open === 'aimgr' ? (d.ai_manager ? 'common.edit' : 'team.ai.add') : 'int2.cat.go')}<ArrowRight className="h-4 w-4" />
+            {t(open === 'instagram' ? 'int2.ig.go' : 'int2.cat.go')}<ArrowRight className="h-4 w-4" />
           </Link>
         </Drawer>
       )}

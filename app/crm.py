@@ -98,12 +98,8 @@ def auto_assign(db: Session, contact: Contact) -> None:
     owner = contact.account.user
     if not owner or not owner.auto_assign:
         return
-    members = team_members(db, owner.id)
+    members = [m for m in team_members(db, owner.id) if not m.is_ai]
     if not members:
-        return
-    ai_all = next((m for m in members if m.is_ai and m.ai_take_all), None)
-    if ai_all:
-        assign(db, contact, ai_all, "⚡ auto")
         return
     open_ids = [s["id"] for s in get_stages(contact.account) if s["type"] == "open"]
     load = dict(db.execute(select(Contact.assigned_to, func.count(Contact.id)).where(

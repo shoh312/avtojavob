@@ -74,6 +74,7 @@ async def lifespan(app: FastAPI):
     init_db()
     _promote_admins()
     _interrupt_broadcasts()
+    _migrate_ai_managers()
     task = asyncio.create_task(_background_loops())
     yield
     task.cancel()
@@ -84,6 +85,13 @@ def _admin_emails() -> list[str]:
 
 
 _http = httpx.Client(timeout=15)
+
+
+def _migrate_ai_managers():
+    from .db import SessionLocal
+    with SessionLocal() as db:
+        if aimanager.migrate_ai_managers(db):
+            log.info("AI menejer sozlamalari AI sotuvchiga ko'chirildi")
 
 
 def _interrupt_broadcasts():
@@ -1174,13 +1182,13 @@ def google_callback(request: Request, code: str = "", state: str = "", db: Sessi
 
 def _integrations_json(db: Session, acc: IGAccount) -> dict:
     return {"ai_enabled": acc.ai_enabled, "ai_prompt": acc.ai_prompt, "ai_available": services.ai_available(db),
-            "ai_collect_leads": acc.ai_collect_leads,
+            "ai_collect_leads": acc.ai_collect_leads, "ai_name": acc.ai_name or "", "ai_crm": acc.ai_crm,
+            "ai_handoff": acc.ai_handoff, "ai_followup_hours": acc.ai_followup_hours or 0,
             "telegram": {"connected": bool(acc.tg_chat_id), "chat": acc.tg_chat_title,
                          "two_way": settings.APP_URL.startswith("https://"), "bot": acc.tg_bot_username or ""},
             "tg_notify_leads": acc.tg_notify_leads, "tg_notify_inbox": acc.tg_notify_inbox,
             "tg_notify_all": acc.tg_notify_all,
             "instagram": {"username": acc.username, "active": acc.active, "picture_url": acc.picture_url},
-            "ai_manager": bool(aimanager.get_ai_manager(db, acc.user_id)),
             "products": db.scalar(select(func.count(Product.id)).where(Product.account_id == acc.id)) or 0,
             "webhook_flows": [{"id": f.id, "name": f.name} for f in acc.flows if '"webhook"' in (f.graph_json or "")]}
 
@@ -1196,7 +1204,15 @@ def integrations_save(account_id: int, body: dict = Body(...), user: User = Depe
     acc = owned_account(db, user, account_id)
     if "ai_prompt" in body:
         acc.ai_prompt = str(body["ai_prompt"] or "")[:8000]
-    for key in ("ai_enabled", "ai_collect_leads", "tg_notify_leads", "tg_notify_inbox", "tg_notify_all"):
+    if "ai_name" in body:
+        acc.ai_name = str(body["ai_name"] or "").strip()[:80]
+    if "ai_followup_hours" in body:
+        try:
+            acc.ai_followup_hours = max(0, min(int(body["ai_followup_hours"] or 0), 20))
+        except (TypeError, ValueError):
+            err("bad_value")
+    for key in ("ai_enabled", "ai_collect_leads", "ai_crm", "ai_handoff", "tg_notify_leads", "tg_notify_inbox",
+                "tg_notify_all"):
         if key in body:
             setattr(acc, key, bool(body[key]))
     db.commit()
@@ -1242,18 +1258,21 @@ def ai_test(account_id: int, body: dict = Body(...), user: User = Depends(curren
     acc = owned_account(db, user, account_id)
     if not services.ai_available(db):
         err("ai_unavailable")
-    question = str(body.get("message") or "").strip()[:1000]
-    if not question:
+    history = []
+    for row in (body.get("messages") or [])[-16:]:
+        role = "assistant" if (row or {}).get("role") == "assistant" else "user"
+        text = str((row or {}).get("content") or "").strip()[:1000]
+        if text:
+            history.append({"role": role, "content": text})
+    if body.get("message"):
+        history.append({"role": "user", "content": str(body["message"]).strip()[:1000]})
+    if not history or history[-1]["role"] != "user":
         err("empty")
-    prompt = str(body.get("prompt") if body.get("prompt") is not None else acc.ai_prompt)
-    collect = body.get("collect_leads") if body.get("collect_leads") is not None else acc.ai_collect_leads
-    products = catalog.active_products(db, acc.id)
-    answer = services.ai_reply(db, prompt, [{"role": "user", "content": question}], "ask" if collect else "off",
-                               catalog.catalog_text(products))
-    if not answer:
+    overrides = {k: body.get(k) for k in ("prompt", "name", "collect_leads", "crm", "handoff")}
+    res = aimanager.simulate(db, acc, history, str(body.get("stage") or "") or None, overrides)
+    if not res:
         err("ai_failed")
-    text, ids = catalog.split_tags(answer)
-    return {"answer": text, "products": [_product_json(p) for pid in ids for p in products if p.id == pid]}
+    return {**res, "answer": res["reply"], "products": [_product_json(p) for p in res["products"]]}
 
 
 # ---------------------------------------------------------------- jonli chat (Inbox)
@@ -1538,71 +1557,10 @@ def _member_json(db: Session, owner: User, u: User) -> dict:
             "last_login_at": iso(u.last_login_at), "assigned": assigned, "telegram": links}
 
 
-def _ai_manager_json(db: Session, m: User | None) -> dict | None:
-    if not m:
-        return None
-    return {"id": m.id, "name": m.name, "instructions": m.ai_instructions, "followup_hours": m.ai_followup_hours,
-            "take_all": m.ai_take_all, "assigned": db.scalar(select(func.count(Contact.id)).where(Contact.assigned_to == m.id)) or 0}
-
-
 @app.get("/api/team")
 def team_list(user: User = Depends(owner_user), db: Session = Depends(get_db)):
     return {"members": [_member_json(db, user, m) for m in crm.team_members(db, user.id) if not m.is_ai],
-            "auto_assign": user.auto_assign, "ai_manager": _ai_manager_json(db, aimanager.get_ai_manager(db, user.id)),
-            "ai_available": services.ai_available(db)}
-
-
-@app.put("/api/team/ai")
-def team_ai_save(body: dict = Body(...), user: User = Depends(owner_user), db: Session = Depends(get_db)):
-    m = aimanager.get_ai_manager(db, user.id)
-    if not m:
-        m = User(email=f"ai-{user.id}-{secrets.token_hex(4)}@ai.chatflow.local", name="AI Menejer", is_ai=True,
-                 password_hash=hash_password(secrets.token_urlsafe(32)), owner_id=user.id, lang=user.lang, plan="trial")
-        db.add(m)
-    if "name" in body:
-        m.name = str(body["name"] or "").strip()[:120] or "AI Menejer"
-    if "instructions" in body:
-        m.ai_instructions = str(body["instructions"] or "")[:4000]
-    if "followup_hours" in body:
-        m.ai_followup_hours = max(0, min(int(body["followup_hours"] or 0), 20))
-    if "take_all" in body:
-        m.ai_take_all = bool(body["take_all"])
-    db.commit()
-    return _ai_manager_json(db, m)
-
-
-@app.post("/api/team/ai/test")
-def team_ai_test(body: dict = Body(...), user: User = Depends(owner_user), db: Session = Depends(get_db)):
-    """AI menejer bilan sinov suhbati (mijozga hech narsa yuborilmaydi, CRM o'zgarmaydi)."""
-    acc = owned_account(db, user, int(body.get("account_id") or 0))
-    m = aimanager.get_ai_manager(db, user.id)
-    if not m:
-        err("no_ai_manager")
-    if not services.ai_available(db):
-        err("ai_unavailable")
-    history = []
-    for row in (body.get("messages") or [])[-16:]:
-        role = "assistant" if (row or {}).get("role") == "assistant" else "user"
-        text = str((row or {}).get("content") or "").strip()[:1000]
-        if text:
-            history.append({"role": role, "content": text})
-    if not history or history[-1]["role"] != "user":
-        err("empty")
-    res = aimanager.simulate(db, m, acc, history, str(body.get("stage") or "") or None)
-    if not res:
-        err("ai_failed")
-    return {**res, "products": [_product_json(p) for p in res["products"]]}
-
-
-@app.delete("/api/team/ai")
-def team_ai_delete(user: User = Depends(owner_user), db: Session = Depends(get_db)):
-    m = aimanager.get_ai_manager(db, user.id)
-    if m:
-        for c in db.scalars(select(Contact).where(Contact.assigned_to == m.id)):
-            c.assigned_to = None
-        db.delete(m)
-        db.commit()
-    return {"ok": True}
+            "auto_assign": user.auto_assign}
 
 
 @app.post("/api/team")

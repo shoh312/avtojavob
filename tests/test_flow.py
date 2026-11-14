@@ -403,25 +403,36 @@ def test_inbox_and_agent_reply(client):
 def test_ai_assistant(client, monkeypatch):
     from app import services
     acc = S["acc"]
-    r = client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": True, "ai_prompt": "Dokon: kiyimlar"},
-                   headers=H).json()
-    assert r["ai_enabled"] and r["ai_available"] is False
+    r = client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": True, "ai_prompt": "Dokon: kiyimlar",
+                                                               "ai_name": "Madina"}, headers=H).json()
+    assert r["ai_enabled"] and r["ai_available"] is False and r["ai_name"] == "Madina" and r["ai_crm"] and r["ai_handoff"]
     assert client.post(f"/api/accounts/{acc}/ai/test", json={"message": "hi"}, headers=H).json()["error"] == "ai_unavailable"
 
     seen = {}
     monkeypatch.setattr(services, "ai_available", lambda db: True)
 
-    def fake_reply(db, prompt, history, leads="off", catalog=""):
-        seen["prompt"], seen["history"] = prompt, history
-        return "Ish vaqti 9:00–18:00"
-    monkeypatch.setattr(services, "ai_reply", fake_reply)
+    def fake(db, system, history):
+        seen["system"], seen["history"] = system, history
+        return json.dumps({"reply": "Ish vaqti 9:00–18:00"}), None
+    monkeypatch.setattr(services, "ai_chat_json", fake)
     calls.clear()
     hook(client, text_msg(LONG_MID + "ai1", "Soat nechagacha ishlaysiz?"))  # hech bir ssenariy mos emas
     assert calls == [("dm", "999", {"text": "Ish vaqti 9:00–18:00"})]
-    assert seen["prompt"] == "Dokon: kiyimlar"
+    assert "Dokon: kiyimlar" in seen["system"] and "You are Madina" in seen["system"]
     assert seen["history"][-1] == {"role": "user", "content": "Soat nechagacha ishlaysiz?"}
+    assert "CRM stages" in seen["system"] and "name, phone number and email" in seen["system"]
 
-    monkeypatch.setattr(services, "ai_reply", lambda db, p, h, leads="off", catalog="": None)  # rad etildi / xato
+    # o'chirilgan imkoniyatlar AI ko'rsatmasiga kirmaydi
+    r = client.put(f"/api/accounts/{acc}/integrations", json={"ai_crm": False, "ai_collect_leads": False,
+                                                               "ai_handoff": False, "ai_followup_hours": 4}, headers=H).json()
+    assert r["ai_followup_hours"] == 4 and not r["ai_crm"]
+    hook(client, text_msg(LONG_MID + "ai1b", "Yana bir savol"))
+    assert "CRM stages" not in seen["system"] and "name, phone number and email" not in seen["system"]
+    assert 'Set "handoff": true' not in seen["system"]
+    client.put(f"/api/accounts/{acc}/integrations", json={"ai_crm": True, "ai_collect_leads": True, "ai_handoff": True,
+                                                          "ai_followup_hours": 0}, headers=H)
+
+    monkeypatch.setattr(services, "ai_chat_json", lambda db, s, h: (None, "error"))  # rad etildi / xato
     calls.clear()
     hook(client, text_msg(LONG_MID + "ai2", "???"))
     assert calls == []
@@ -713,13 +724,13 @@ def test_lead_capture_from_direct(client, monkeypatch):
     monkeypatch.setattr(services, "_tg", lambda token, method, **p: sent.append((method, p)) or {"message_id": 1})
     seen = {}
     monkeypatch.setattr(services, "ai_available", lambda db: True)
-    monkeypatch.setattr(services, "ai_reply", lambda db, prompt, h, leads="off", catalog="": seen.setdefault("leads", leads) and "Rahmat!")
+    monkeypatch.setattr(services, "ai_chat_json", lambda db, system, h: seen.update(system=system) or (json.dumps({"reply": "Rahmat!"}), None))
     client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": True, "ai_collect_leads": True}, headers=H)
 
     msg = lambda mid, text: {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [  # noqa: E731
         {"sender": {"id": "lead-1"}, "recipient": {"id": IG_ID}, "timestamp": 1, "message": {"mid": mid, "text": text}}]}]}
     hook(client, msg(LONG_MID + "l1", "Narxi qancha?"))
-    assert seen["leads"] == "ask"  # AI telefon so'rashga yo'naltirilgan
+    assert "name, phone number and email" in seen["system"] and "Known customer details: none" in seen["system"]
     assert "FIRST give its price" in services.build_system("x", "ask") and "only ONCE" in services.build_system("x", "ask")
     assert "manager will reply soon" not in services.build_system("x", "ask")
     sent.clear()
@@ -733,7 +744,7 @@ def test_lead_capture_from_direct(client, monkeypatch):
     seen.clear()
     sent.clear()
     hook(client, msg(LONG_MID + "l3", "90 123 45 67"))
-    assert seen.get("leads") == "done"
+    assert "phone: 90 123 45 67" in seen["system"]
     assert not any("🎯" in p.get("text", "") for m, p in sent if m == "sendMessage")
     client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": False}, headers=H)
 
@@ -765,10 +776,10 @@ def test_product_catalog(client, monkeypatch):
     seen = {}
     monkeypatch.setattr(services, "ai_available", lambda db: True)
 
-    def fake_reply(db, prompt, history, leads="off", catalog=""):
-        seen["catalog"] = catalog
-        return f"Cyberlab 100$ turadi. [[product:{p1['id']}]]"
-    monkeypatch.setattr(services, "ai_reply", fake_reply)
+    def fake_json(db, system, history):
+        seen["catalog"] = system
+        return json.dumps({"reply": f"Cyberlab 100$ turadi. [[product:{p1['id']}]]"}), None
+    monkeypatch.setattr(services, "ai_chat_json", fake_json)
     client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": True}, headers=H)
     calls.clear()
     msg = {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [
@@ -783,7 +794,8 @@ def test_product_catalog(client, monkeypatch):
     assert el["buttons"][0] == {"type": "postback", "title": "🛒 Buyurtma berish", "payload": f"O:{p1['id']}"}
     assert el["buttons"][1]["url"] == "https://cyberlab.tj"
 
-    # buyurtma tugmasi -> CRM, mahsulot maydoni, telefon so'rash
+    # buyurtma tugmasi (AI o'chiq) -> CRM, mahsulot maydoni, kontakt so'rash
+    client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": False}, headers=H)
     calls.clear()
     hook(client, {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [
         {"sender": {"id": "shop-1"}, "recipient": {"id": IG_ID}, "timestamp": 1,
@@ -937,49 +949,48 @@ def test_ai_generate_flow(client, monkeypatch):
     assert client.post("/api/flows/generate", json={"account_id": acc, "prompt": "biror narsa"}, headers=H).json()["error"] == "ai_failed"
 
 
-def test_ai_manager(client, monkeypatch):
+def test_ai_sales(client, monkeypatch):
     from app import aimanager, services
-    from app.models import Message, User
+    from app.engine import record_message
+    from app.models import IGAccount, Product, User
     _login(client, "a@b.tj", "newpass123")
     acc = S["acc"]
     for f in client.get(f"/api/flows?account_id={acc}").json()["items"]:
         client.put(f"/api/flows/{f['id']}", json={"active": False}, headers=H)
-    client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": False}, headers=H)
-
     client.put("/api/crm/stages", json={"account_id": acc, "stages": [
         {"id": "new", "name": "Yangi", "color": "sky", "type": "open"},
         {"id": "contacted", "name": "Bog'lanildi", "color": "violet", "type": "open"},
         {"id": "won", "name": "Sotildi", "color": "emerald", "type": "won"}]}, headers=H)
-    r = client.put("/api/team/ai", json={"name": "Sardor AI", "instructions": "Muloyim gapir", "followup_hours": 4,
-                                         "take_all": True}, headers=H).json()
-    ai_id = r["id"]
-    team = client.get("/api/team").json()
-    assert team["ai_manager"]["name"] == "Sardor AI" and all(m["id"] != ai_id for m in team["members"])
-    with SessionLocal() as db:
-        ai_email = db.get(User, ai_id).email
-    assert client.post("/api/auth/login", json={"email": ai_email, "password": "x"}, headers=H).status_code == 401
+    client.put(f"/api/accounts/{acc}/integrations", json={"ai_name": "", "ai_enabled": False}, headers=H)
 
-    # yangi lid avtomatik AI menejerga
-    client.put("/api/team/settings", json={"auto_assign": True}, headers=H)
+    # eski "AI menejer" -> AI sotuvchiga ko'chadi
     with SessionLocal() as db:
-        from app import crm as crm_mod
-        c = Contact(account_id=acc, igsid="ai-lead", username="ailead")
-        db.add(c)
+        a = db.get(IGAccount, acc)
+        legacy = User(email="ai-legacy@ai.chatflow.local", name="Sardor AI", is_ai=True, password_hash="x",
+                      owner_id=a.user_id, ai_instructions="Muloyim gapir", ai_followup_hours=4, ai_take_all=True)
+        db.add(legacy)
         db.commit()
-        crm_mod.set_stage(db, c, crm_mod.get_stages(c.account)[0]["id"], "test")
-        assert c.assigned_to == ai_id
-        cid = c.id
-        product_id = db.query(__import__("app.models", fromlist=["Product"]).Product).filter_by(account_id=acc).first().id
+        c0 = Contact(account_id=acc, igsid="legacy-lead", username="legacy", assigned_to=legacy.id)
+        db.add(c0)
+        db.commit()
+        assert aimanager.migrate_ai_managers(db) == 1
+        assert aimanager.migrate_ai_managers(db) == 0
+        db.refresh(c0)
+        assert c0.assigned_to is None and db.get(User, legacy.id).is_blocked
+        product_id = db.query(Product).filter_by(account_id=acc).first().id
+    d = client.get(f"/api/accounts/{acc}/integrations").json()
+    assert d["ai_name"] == "Sardor AI" and "Muloyim gapir" in d["ai_prompt"] and d["ai_followup_hours"] == 4 and d["ai_enabled"]
+    assert "ai_manager" not in client.get("/api/team").json()
 
-    # AI menejer javob beradi, bosqich va izoh qo'yadi, mahsulot kartochkasi yuboradi
+    # AI javob beradi, bosqich, izoh, ism/email saqlanadi, kartochka yuboriladi
     seen = {}
     monkeypatch.setattr(services, "ai_available", lambda db: True)
-    stage2 = crm_mod.get_stages  # noqa: F841
 
     def fake_json(db, system, history):
         seen.update(system=system, history=history)
         return json.dumps({"reply": f"Albatta! Mana bizning mahsulot [[product:{product_id}]]", "stage": "contacted",
-                           "note": "Narx bilan qiziqdi", "handoff": False}), None
+                           "note": "Narx bilan qiziqdi", "handoff": False,
+                           "fields": {"name": "Ali", "phone": None, "email": "ali@mail.tj"}}), None
     monkeypatch.setattr(services, "ai_chat_json", fake_json)
     calls.clear()
     msg = lambda mid, text: {"object": "instagram", "entry": [{"id": IG_ID, "time": 1, "messaging": [  # noqa: E731
@@ -987,8 +998,10 @@ def test_ai_manager(client, monkeypatch):
     hook(client, msg(LONG_MID + "am1", "Salom, nima sotasizlar?"))
     assert "Sardor AI" in seen["system"] and "Muloyim gapir" in seen["system"] and '"contacted"' in seen["system"]
     assert calls[0][2] == {"text": "Albatta! Mana bizning mahsulot"} and calls[1][2]["attachment"]["payload"]["template_type"] == "generic"
+    with SessionLocal() as db:
+        cid = db.query(Contact).filter_by(account_id=acc, igsid="ai-lead").one().id
     tl = client.get(f"/api/contacts/{cid}/timeline").json()
-    assert tl["contact"]["stage"] == "contacted"
+    assert tl["contact"]["stage"] == "contacted" and tl["contact"]["fields"]["email"] == "ali@mail.tj"
     assert any(i["type"] == "note" and i["text"] == "Narx bilan qiziqdi" and "Sardor AI" in i["author"] for i in tl["items"])
 
     # 'sotildi' bosqichini AI qo'ya olmaydi
@@ -996,9 +1009,22 @@ def test_ai_manager(client, monkeypatch):
     hook(client, msg(LONG_MID + "am2", "to'ladim"))
     assert client.get(f"/api/contacts/{cid}/timeline").json()["contact"]["stage"] == "contacted"
 
-    # follow-up: mijoz jim qoldi
+    # odamga topshirish: mas'ul belgilanadi, AI shu suhbatda jim
+    monkeypatch.setattr(services, "ai_chat_json", lambda db, s, h: (json.dumps(
+        {"reply": "Rahmat, hamkasbim bog'lanadi", "handoff": True, "fields": {"phone": "+992 90 111 22 33"}}), None))
+    hook(client, msg(LONG_MID + "am3", "Raqamim +992 90 111 22 33"))
     with SessionLocal() as db:
         c = db.get(Contact, cid)
+        assert c.assigned_to and c.bot_paused() and c.fields["phone"]
+    calls.clear()
+    hook(client, msg(LONG_MID + "am4", "yana savol"))
+    assert calls == []
+
+    # eslatma: AI oxirgi yozgan, mijoz jim
+    with SessionLocal() as db:
+        c = db.get(Contact, cid)
+        record_message(db, acc, c, "out", "Savolingiz bormi?", "ai")
+        c.bot_paused_until = None
         c.last_inbound_at = utcnow() - timedelta(hours=6)
         c.last_message_at = utcnow() - timedelta(hours=5)
         c.ai_followup_at = None
@@ -1008,29 +1034,20 @@ def test_ai_manager(client, monkeypatch):
     assert aimanager.run_followups() == 1 and calls[0][2] == {"text": "Savollaringiz qoldimi? 🙂"}
     assert aimanager.run_followups() == 0  # faqat bir marta
 
-    # sinov chati: hech narsa yuborilmaydi, bosqich faqat taklif sifatida qaytadi
+    # sinov chati: hech narsa yuborilmaydi
     monkeypatch.setattr(services, "ai_chat_json", lambda db, s, h: (json.dumps(
-        {"reply": f"Mana [[product:{product_id}]]", "stage": "contacted", "note": "Qiziqdi", "handoff": True}), None))
+        {"reply": f"Mana [[product:{product_id}]]", "stage": "contacted", "note": "Qiziqdi", "handoff": True,
+         "fields": {"name": "Vali"}}), None))
     calls.clear()
-    r = client.post("/api/team/ai/test", json={"account_id": acc, "stage": "new",
-                                               "messages": [{"role": "user", "content": "Narxi?"}]}, headers=H).json()
+    r = client.post(f"/api/accounts/{acc}/ai/test", json={"stage": "new", "messages": [{"role": "user", "content": "Narxi?"}]},
+                    headers=H).json()
     assert r["reply"] == "Mana" and r["products"][0]["id"] == product_id and r["stage"] == "contacted"
-    assert r["note"] == "Qiziqdi" and r["handoff"] is True and calls == []
-    assert client.post("/api/team/ai/test", json={"account_id": acc, "messages": []}, headers=H).json()["error"] == "empty"
-
-    # odamga topshirish (handoff)
-    client.post("/api/team", json={"name": "Odam Menejer", "email": "human@shop.tj"}, headers=H)
-    monkeypatch.setattr(services, "ai_chat_json", lambda db, s, h: (json.dumps(
-        {"reply": "Menejerimiz hozir bog'lanadi", "handoff": True, "note": "Sotib olishga tayyor"}), None))
-    hook(client, msg(LONG_MID + "am3", "Olaman, qanday to'layman?"))
-    tl = client.get(f"/api/contacts/{cid}/timeline").json()
-    assert tl["contact"]["assignee"] == "Odam Menejer"
-    with SessionLocal() as db:
-        assert db.query(Message).filter_by(contact_id=cid, source="ai").count() >= 3
-
-    client.delete("/api/team/ai", headers=H)
-    client.put("/api/team/settings", json={"auto_assign": False}, headers=H)
-    assert client.get("/api/team").json()["ai_manager"] is None
+    assert r["note"] == "Qiziqdi" and r["handoff"] is True and r["fields"] == {"name": "Vali"} and calls == []
+    r = client.post(f"/api/accounts/{acc}/ai/test", json={"crm": False, "handoff": False,
+                                                           "messages": [{"role": "user", "content": "Narxi?"}]}, headers=H).json()
+    assert r["stage"] is None and r["note"] == "" and r["handoff"] is False
+    assert client.post(f"/api/accounts/{acc}/ai/test", json={"messages": []}, headers=H).json()["error"] == "empty"
+    client.put(f"/api/accounts/{acc}/integrations", json={"ai_enabled": False, "ai_followup_hours": 0}, headers=H)
 
 
 def test_flow_analytics(client):
@@ -1140,7 +1157,7 @@ def test_echo_and_history(client):
 def test_integrations_overview(client):
     d = client.get(f"/api/accounts/{S['acc']}/integrations").json()
     assert d["instagram"]["username"] and isinstance(d["webhook_flows"], list) and "bot" in d["telegram"]
-    assert isinstance(d["ai_manager"], bool) and d["products"] >= 0
+    assert "ai_name" in d and isinstance(d["ai_followup_hours"], int) and d["products"] >= 0
 
 
 def test_webhook_block(client, monkeypatch):
