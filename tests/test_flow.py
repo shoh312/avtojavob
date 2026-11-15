@@ -1420,3 +1420,33 @@ def test_daily_report(client, monkeypatch):
     with SessionLocal() as db:
         assert db.get(User, uid).daily_report is False
     assert "invalid" in client.get("/email/unsubscribe?token=bad").text
+
+
+def test_admin_delete_user(client):
+    from app.db import SessionLocal
+    from app.models import Contact, IGAccount, Message, User
+    from app.security import encrypt, hash_password
+    with SessionLocal() as db:
+        u = User(email="gone@x.tj", password_hash=hash_password("12345678"))
+        db.add(u)
+        db.flush()
+        m = User(email="seller@x.tj", password_hash="x", owner_id=u.id)
+        acc = IGAccount(user_id=u.id, ig_user_id="del-1", username="gone_shop", access_token_enc=encrypt("t"))
+        db.add_all([m, acc])
+        db.flush()
+        c = Contact(account_id=acc.id, igsid="del-c1", username="cust")
+        db.add(c)
+        db.flush()
+        db.add(Message(account_id=acc.id, contact_id=c.id, direction="in", text="salom"))
+        db.commit()
+        uid, mid, aid = u.id, m.id, acc.id
+    _login(client, "boss@chatflow.tj")
+    me = client.get("/api/me").json()["user"]
+    assert client.post(f"/api/admin/users/{me['id']}/delete", json={"confirm": me["email"]}, headers=H).json()["error"] == "self"
+    assert client.post(f"/api/admin/users/{uid}/delete", json={"confirm": "wrong@x.tj"}, headers=H).json()["error"] == "confirm_mismatch"
+    r = client.post(f"/api/admin/users/{uid}/delete", json={"confirm": "GONE@x.tj "}, headers=H).json()
+    assert r == {"ok": True, "accounts": 1, "members": 1}
+    with SessionLocal() as db:
+        assert db.get(User, uid) is None and db.get(User, mid) is None and db.get(IGAccount, aid) is None
+        assert db.scalar(__import__("sqlalchemy").select(Contact).where(Contact.igsid == "del-c1")) is None
+    assert client.get(f"/api/admin/users/{uid}").status_code == 404

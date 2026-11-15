@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Ban, Search, ShieldCheck, Users } from 'lucide-react'
-import { api, type AdminUser, type AdminUserDetail, type PlanKey } from '../../api'
+import { AlertTriangle, Ban, Search, ShieldCheck, Trash2, Users } from 'lucide-react'
+import { api, ApiError, type AdminUser, type AdminUserDetail, type PlanKey } from '../../api'
 import { useI18n, useTimeAgo, type TKey } from '../../i18n'
 import { Avatar, Button, Empty, Modal, PageHeader, Spinner, useToast } from '../../components/ui'
 import { PlanBadge } from '../../components/Plan'
@@ -9,6 +9,7 @@ import { fmtNum } from '../../components/charts'
 const PRICES: Record<PlanKey, number> = { trial: 0, pro: 199, business: 499 }
 
 function UserModal({ id, onClose, onChanged }: { id: number; onClose: () => void; onChanged: () => void }) {
+  const [del, setDel] = useState(false)
   const { t, lang } = useI18n()
   const ago = useTimeAgo()
   const toast = useToast()
@@ -107,9 +108,54 @@ function UserModal({ id, onClose, onChanged }: { id: number; onClose: () => void
                 </Button>
               )}
             </div>
+            {!u.is_admin && (
+              <button disabled={busy} onClick={() => setDel(true)}
+                className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-brand-200 py-2.5 text-[13px] font-semibold text-brand-700 transition hover:border-brand-400 hover:bg-brand-50">
+                <Trash2 className="h-4 w-4" />{t('adm.delete')}
+              </button>
+            )}
           </div>
         </div>
       )}
+      {u && del && <DeleteUser user={u} onCancel={() => setDel(false)} onDeleted={() => { setDel(false); onChanged(); onClose() }} />}
+    </Modal>
+  )
+}
+
+/** Foydalanuvchini butunlay o'chirish — emailni qo'lda yozib tasdiqlash bilan. */
+function DeleteUser({ user, onCancel, onDeleted }: { user: AdminUserDetail; onCancel: () => void; onDeleted: () => void }) {
+  const { t } = useI18n()
+  const toast = useToast()
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const ok = text.trim().toLowerCase() === user.email.toLowerCase()
+  const run = async () => {
+    setBusy(true)
+    try {
+      await api.post(`/api/admin/users/${user.id}/delete`, { confirm: text.trim() })
+      toast(t('adm.deleted'))
+      onDeleted()
+    } catch (e) {
+      toast(e instanceof ApiError && ['confirm_mismatch', 'admin_protected', 'self'].includes(e.code) ? t(`err.${e.code}` as TKey) : t('common.error'), 'error')
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal open onClose={onCancel} title={t('adm.delete_t')} icon={<AlertTriangle className="h-5 w-5" />}>
+      <div className="rounded-2xl bg-brand-50 p-4 text-[13.5px] leading-relaxed text-brand-900">
+        <div className="font-semibold">{t('adm.delete_d')}</div>
+        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-brand-800">
+          <li>{t('adm.delete_l1')}</li><li>{t('adm.delete_l2')}</li><li>{t('adm.delete_l3')}</li>
+        </ul>
+      </div>
+      <label className="mt-4 block">
+        <span className="label">{t('adm.delete_type')} <b className="select-all font-mono text-ink">{user.email}</b></span>
+        <input className="input" value={text} onChange={e => setText(e.target.value)} placeholder={user.email} autoComplete="off" autoFocus />
+      </label>
+      <div className="mt-5 flex justify-end gap-2">
+        <Button variant="secondary" onClick={onCancel} disabled={busy}>{t('common.cancel')}</Button>
+        <Button variant="danger" onClick={run} disabled={!ok} loading={busy}><Trash2 className="h-4 w-4" />{t('adm.delete_btn')}</Button>
+      </div>
     </Modal>
   )
 }

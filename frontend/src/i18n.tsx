@@ -151,6 +151,7 @@ const en = {
   // sozlamalar
   'set.title': 'Settings', 'set.profile': 'Profile', 'set.language': 'Language', 'set.password': 'Change password',
   'set.current_pw': 'Current password', 'set.new_pw': 'New password', 'set.saved': 'Settings saved',
+  'adm.delete': 'Delete user', 'adm.delete_t': 'Delete user permanently?', 'adm.delete_d': 'This cannot be undone. Everything will be deleted:', 'adm.delete_l1': 'the profile and the sellers in their team', 'adm.delete_l2': 'connected Instagram accounts, flows and products', 'adm.delete_l3': 'chats, contacts, CRM and statistics', 'adm.delete_type': 'To confirm, type the email:', 'adm.delete_btn': 'Delete forever', 'adm.deleted': 'User deleted', 'err.confirm_mismatch': 'The email does not match', 'err.admin_protected': 'Admins cannot be deleted',
   'verify.code_lead': 'We sent a 6-digit code to', 'verify.other': 'Use a different account', 'verify.code_t': 'Confirm your email', 'verify.code_d': 'We sent a 6-digit code to {email}. Enter it here.', 'verify.confirm': 'Confirm', 'verify.resend_in': 'Resend in {s}', 'verify.spam': 'No email? Check the Spam folder.',
   'err.code_invalid': 'Wrong code — check and try again', 'err.code_expired': 'The code has expired — request a new one', 'err.code_too_many': 'Too many attempts — request a new code',
   'set.daily_t': 'Daily email report', 'set.daily_d': 'Every morning: messages, auto-replies, new customers and leads for the last 24 hours.',
@@ -1079,6 +1080,7 @@ const ru: Dict = {
 
   'set.title': 'Настройки', 'set.profile': 'Профиль', 'set.language': 'Язык', 'set.password': 'Сменить пароль',
   'set.current_pw': 'Текущий пароль', 'set.new_pw': 'Новый пароль', 'set.saved': 'Настройки сохранены',
+  'adm.delete': 'Удалить пользователя', 'adm.delete_t': 'Удалить пользователя навсегда?', 'adm.delete_d': 'Это действие нельзя отменить. Будет удалено всё:', 'adm.delete_l1': 'профиль и продавцы из его команды', 'adm.delete_l2': 'подключённые аккаунты Instagram, сценарии и товары', 'adm.delete_l3': 'чаты, контакты, CRM и статистика', 'adm.delete_type': 'Для подтверждения введите email:', 'adm.delete_btn': 'Удалить навсегда', 'adm.deleted': 'Пользователь удалён', 'err.confirm_mismatch': 'Email не совпадает', 'err.admin_protected': 'Администратора удалить нельзя',
   'verify.code_lead': 'Мы отправили 6-значный код на', 'verify.other': 'Войти в другой аккаунт', 'verify.code_t': 'Подтвердите email', 'verify.code_d': 'Мы отправили 6-значный код на {email}. Введите его здесь.', 'verify.confirm': 'Подтвердить', 'verify.resend_in': 'Повторно через {s}', 'verify.spam': 'Нет письма? Проверьте папку «Спам».',
   'err.code_invalid': 'Неверный код — проверьте и попробуйте ещё раз', 'err.code_expired': 'Срок кода истёк — запросите новый', 'err.code_too_many': 'Слишком много попыток — запросите новый код',
   'set.daily_t': 'Ежедневный отчёт на email', 'set.daily_d': 'Каждое утро: сообщения, автоответы, новые клиенты и заявки за сутки.',
@@ -2005,6 +2007,7 @@ const uz: Dict = {
 
   'set.title': 'Sozlamalar', 'set.profile': 'Profil', 'set.language': 'Til', 'set.password': "Parolni o'zgartirish",
   'set.current_pw': 'Joriy parol', 'set.new_pw': 'Yangi parol', 'set.saved': 'Sozlamalar saqlandi',
+  'adm.delete': "Foydalanuvchini o'chirish", 'adm.delete_t': "Foydalanuvchi butunlay o'chirilsinmi?", 'adm.delete_d': "Bu amalni qaytarib bo'lmaydi. Hammasi o'chadi:", 'adm.delete_l1': 'profil va jamoasidagi sotuvchilar', 'adm.delete_l2': 'ulangan Instagram akkauntlar, ssenariylar va tovarlar', 'adm.delete_l3': 'chatlar, kontaktlar, CRM va statistika', 'adm.delete_type': 'Tasdiqlash uchun emailni yozing:', 'adm.delete_btn': "Butunlay o'chirish", 'adm.deleted': "Foydalanuvchi o'chirildi", 'err.confirm_mismatch': 'Email mos kelmadi', 'err.admin_protected': "Adminni o'chirib bo'lmaydi",
   'verify.code_lead': '6 xonali kodni ushbu manzilga yubordik:', 'verify.other': 'Boshqa akkauntga kirish', 'verify.code_t': 'Emailingizni tasdiqlang', 'verify.code_d': '{email} manziliga 6 xonali kod yubordik. Uni shu yerga kiriting.', 'verify.confirm': 'Tasdiqlash', 'verify.resend_in': '{s} dan keyin qayta', 'verify.spam': 'Xat kelmadimi? «Spam» papkasini tekshiring.',
   'err.code_invalid': "Kod noto'g'ri — tekshirib qayta urinib ko'ring", 'err.code_expired': "Kod muddati tugadi — yangisini so'rang", 'err.code_too_many': "Urinishlar ko'p — yangi kod so'rang",
   'set.daily_t': 'Har kuni emailga hisobot', 'set.daily_d': "Har tong: so'nggi 24 soatdagi xabarlar, avtojavoblar, yangi mijozlar va arizalar.",
@@ -2931,6 +2934,7 @@ const tj: Dict = {
 
   'set.title': 'Танзимот', 'set.profile': 'Профил', 'set.language': 'Забон', 'set.password': 'Иваз кардани парол',
   'set.current_pw': 'Пароли ҷорӣ', 'set.new_pw': 'Пароли нав', 'set.saved': 'Танзимот нигоҳ дошта шуд',
+  'adm.delete': 'Нест кардани корбар', 'adm.delete_t': 'Корбар комилан нест карда шавад?', 'adm.delete_d': 'Ин амалро бекор кардан мумкин нест. Ҳама нест мешавад:', 'adm.delete_l1': 'профил ва фурӯшандагони дастаи ӯ', 'adm.delete_l2': 'аккаунтҳои пайвасти Instagram, сенарияҳо ва молҳо', 'adm.delete_l3': 'чатҳо, контактҳо, CRM ва омор', 'adm.delete_type': 'Барои тасдиқ email-ро нависед:', 'adm.delete_btn': 'Комилан нест кардан', 'adm.deleted': 'Корбар нест карда шуд', 'err.confirm_mismatch': 'Email мувофиқ нест', 'err.admin_protected': 'Администраторро нест кардан мумкин нест',
   'verify.code_lead': 'Рамзи 6-рақамаро ба ин суроға фиристодем:', 'verify.other': 'Ворид шудан ба аккаунти дигар', 'verify.code_t': 'Email-ро тасдиқ кунед', 'verify.code_d': 'Ба {email} рамзи 6-рақама фиристодем. Онро дар ин ҷо ворид кунед.', 'verify.confirm': 'Тасдиқ', 'verify.resend_in': 'Такрор пас аз {s}', 'verify.spam': 'Мактуб наомад? Ҷузвдони «Спам»-ро санҷед.',
   'err.code_invalid': 'Рамз нодуруст — санҷида бори дигар кӯшиш кунед', 'err.code_expired': 'Мӯҳлати рамз гузашт — рамзи нав дархост кунед', 'err.code_too_many': 'Кӯшишҳо зиёд — рамзи нав дархост кунед',
   'set.daily_t': 'Ҳисоботи ҳаррӯза ба email', 'set.daily_d': 'Ҳар субҳ: паёмҳо, ҷавобҳои худкор, мизоҷони нав ва дархостҳо дар 24 соат.',

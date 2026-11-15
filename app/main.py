@@ -1123,6 +1123,42 @@ def admin_expire(user_id: int, admin: User = Depends(admin_user), db: Session = 
     return _admin_detail(db, u)
 
 
+@app.post("/api/admin/users/{user_id}/delete")
+def admin_delete_user(user_id: int, body: dict = Body(...), admin: User = Depends(admin_user),
+                      db: Session = Depends(get_db)):
+    """Foydalanuvchini butunlay o'chirish: Instagram akkauntlari, ssenariylar, chatlar, CRM, jamoasi.
+    Xavfsizlik: o'zini va boshqa adminlarni o'chirib bo'lmaydi; email qo'lda yozib tasdiqlanadi."""
+    u = _get_user(db, user_id)
+    if u.id == admin.id:
+        err("self")
+    if u.is_admin:
+        err("admin_protected")
+    if str(body.get("confirm") or "").strip().lower() != u.email.lower():
+        err("confirm_mismatch")
+    members = list(db.scalars(select(User).where(User.owner_id == u.id)))
+    people = [u, *members]
+    ids = [p.id for p in people]
+    # boshqa ish joylaridagi mijozlar bu odamlarga biriktirilgan bo'lsa — bo'shatamiz
+    for c in db.scalars(select(Contact).where(Contact.assigned_to.in_(ids))):
+        c.assigned_to = None
+    # yuklangan rasmlar (profil va mijoz avatarlari)
+    files = [p.avatar for p in people if p.avatar]
+    acc_ids = [a.id for a in u.accounts]
+    if acc_ids:
+        files += [a for (a,) in db.execute(select(Contact.avatar).where(Contact.account_id.in_(acc_ids), Contact.avatar != ""))]
+    db.execute(PlanGrant.__table__.delete().where(PlanGrant.user_id.in_(ids)))
+    db.execute(TeamTg.__table__.delete().where(TeamTg.user_id.in_(ids)))
+    for m in members:
+        db.delete(m)
+    db.delete(u)  # Instagram akkauntlari va ularning ma'lumotlari kaskad bilan
+    db.commit()
+    for f in files:
+        if f and "/" not in f and "\\" not in f:
+            (UPLOAD_DIR / f).unlink(missing_ok=True)
+    log.info("admin %s foydalanuvchini o'chirdi: id=%s, akkauntlar=%s, jamoa=%s", admin.id, user_id, len(acc_ids), len(members))
+    return {"ok": True, "accounts": len(acc_ids), "members": len(members)}
+
+
 @app.post("/api/admin/users/{user_id}/block")
 def admin_block(user_id: int, body: dict = Body(...), admin: User = Depends(admin_user),
                 db: Session = Depends(get_db)):
