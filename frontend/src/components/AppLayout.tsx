@@ -137,7 +137,8 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     navigate('/')
   }
   return (
-    <div className="scrollbar-thin flex h-full flex-col gap-6 overflow-y-auto p-4">
+    <div className="flex h-full flex-col">
+      <div className="scrollbar-thin flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-4 pb-3">
       <div className="px-2 pt-1"><Logo size={28} /></div>
       <AccountSwitcher />
       <nav className="flex flex-col gap-1">
@@ -154,7 +155,8 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           ))}
         </nav>
       )}
-      <div className="mt-auto border-t border-line pt-4">
+      </div>
+      <div className="shrink-0 border-t border-line bg-white px-4 py-3">
         <div className="flex items-center gap-3 px-2">
           <Link to="/app/settings" className="shrink-0 rounded-full transition hover:opacity-80"><Avatar name={me?.user.name || me?.user.email || '?'} src={me?.user.avatar_url || null} size={32} /></Link>
           <div className="min-w-0 flex-1">
