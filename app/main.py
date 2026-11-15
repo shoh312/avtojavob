@@ -304,8 +304,8 @@ def logout(request: Request):
 
 def verify_required(db: Session, user: User) -> bool:
     """Kirishdan oldin email kod bilan tasdiqlanishi kerakmi (SMTP bor, egasi, hali tasdiqlanmagan).
-    Jamoa a'zolari va adminlar istisno — pochta ishlamay qolsa ham kira olishlari uchun."""
-    return bool(not user.email_verified and not user.is_manager and not user.is_admin and services.smtp_config(db))
+    Jamoa a'zolari istisno — ularning login/parolini ega yaratadi."""
+    return bool(not user.email_verified and not user.is_manager and services.smtp_config(db))
 
 
 @app.get("/api/me")
