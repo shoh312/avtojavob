@@ -196,7 +196,22 @@ def user_json(u: User) -> dict:
     return {"id": u.id, "email": u.email, "name": u.name, "lang": u.lang, "is_admin": u.is_admin,
             "plan": plan_json(u.workspace), "email_verified": u.email_verified,
             "role": "manager" if u.is_manager else "owner", "avatar_url": avatar_url(u),
-            "google": bool(u.google_sub), "created_at": iso(u.created_at)}
+            "google": bool(u.google_sub), "created_at": iso(u.created_at), "onboarding": onboarding_of(u)}
+
+
+def onboarding_of(u: User) -> dict | None:
+    """Sehrgar holati: None — ko'rsatilmaydi; aks holda {pending, biz, goals, about}."""
+    if not u.onboarding_json or u.is_manager:
+        return None
+    try:
+        data = json.loads(u.onboarding_json)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+ONB_BIZ = {"courses", "shop", "services", "other"}
+ONB_GOALS = {"comments", "sales", "leads", "broadcasts"}
 
 
 def account_json(a: IGAccount) -> dict:
@@ -249,7 +264,8 @@ def register(request: Request, background: BackgroundTasks, body: dict = Body(..
     if db.scalar(select(User).where(User.email == email)):
         err("email_taken")
     user = User(email=email, name=name, password_hash=hash_password(password), lang=lang, plan="trial",
-                plan_expires_at=utcnow() + timedelta(days=TRIAL_DAYS), last_login_at=utcnow())
+                plan_expires_at=utcnow() + timedelta(days=TRIAL_DAYS), last_login_at=utcnow(),
+                onboarding_json='{"pending": true}')
     if email in _admin_emails():
         user.is_admin = True
     db.add(user)
@@ -289,6 +305,12 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
             "features": {"email": bool(services.smtp_config(db)), "ai": services.ai_available(db)}}
 
 
+@app.get("/api/public/plans")
+def plans_open(db: Session = Depends(get_db)):
+    """Landing uchun tariflar (kirishsiz)."""
+    return plans_public(db)
+
+
 @app.get("/api/plans")
 def plans(user: User = Depends(current_user), db: Session = Depends(get_db)):
     return {**plans_public(db), "current": plan_json(user.workspace)}
@@ -309,6 +331,17 @@ def update_me(body: dict = Body(...), user: User = Depends(current_user), db: Se
         user.avatar = new
         if old and old != new:
             (UPLOAD_DIR / old).unlink(missing_ok=True)
+    if isinstance(body.get("onboarding"), dict) and onboarding_of(user) is not None:
+        o, cur = body["onboarding"], onboarding_of(user) or {}
+        if o.get("biz") in ONB_BIZ:
+            cur["biz"] = o["biz"]
+        if isinstance(o.get("goals"), list):
+            cur["goals"] = [g for g in o["goals"] if g in ONB_GOALS]
+        if "about" in o:
+            cur["about"] = str(o["about"] or "")[:4000]
+        if o.get("done"):
+            cur["pending"] = False
+        user.onboarding_json = json.dumps(cur, ensure_ascii=False)
     if body.get("new_password"):
         if not verify_password(str(body.get("password") or ""), user.password_hash):
             err("password_wrong")
@@ -329,6 +362,7 @@ def instagram_connect(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse("/app/accounts?ig_error=not_configured", status_code=303)
     state = secrets.token_urlsafe(24)
     request.session["oauth_state"] = state
+    request.session["oauth_next"] = "welcome" if request.query_params.get("next") == "welcome" else ""
     return RedirectResponse(ig.authorize_url(state), status_code=302)
 
 
@@ -340,7 +374,8 @@ def instagram_callback(request: Request, code: str | None = None, state: str | N
     user = db.get(User, uid) if uid else None
     if not user:
         return RedirectResponse("/login", status_code=303)
-    back = lambda e: RedirectResponse(f"/app/accounts?ig_error={quote(e[:300])}", status_code=303)  # noqa: E731
+    base = "/welcome" if request.session.pop("oauth_next", "") == "welcome" else "/app/accounts"
+    back = lambda e: RedirectResponse(f"{base}?ig_error={quote(e[:300])}", status_code=303)  # noqa: E731
     expected = request.session.pop("oauth_state", None)
     if error or not code:
         return back(error_description or error or "cancelled")
@@ -373,8 +408,11 @@ def instagram_callback(request: Request, code: str | None = None, state: str | N
     acc.access_token_enc = encrypt(token)
     acc.token_expires_at = utcnow() + timedelta(seconds=expires_in or 60 * 86400)
     acc.active = True
+    onb = onboarding_of(user)
+    if onb and onb.get("about") and not acc.ai_prompt:  # sehrgarda yozilgan biznes tavsifi AI sotuvchiga
+        acc.ai_prompt = str(onb["about"])[:8000]
     db.commit()
-    return RedirectResponse(f"/app/accounts?connected={quote(acc.username)}", status_code=303)
+    return RedirectResponse(f"{base}?connected={quote(acc.username)}", status_code=303)
 
 
 @app.get("/api/accounts/overview")
@@ -1260,7 +1298,8 @@ def google_callback(request: Request, code: str = "", state: str = "", db: Sessi
         return RedirectResponse("/login?error=blocked", status_code=303)
     if not user:
         user = User(email=email, name=str(info.get("name") or "")[:120], password_hash=hash_password(secrets.token_urlsafe(24)),
-                    lang=detect_lang(request), plan="trial", plan_expires_at=utcnow() + timedelta(days=TRIAL_DAYS))
+                    lang=detect_lang(request), plan="trial", plan_expires_at=utcnow() + timedelta(days=TRIAL_DAYS),
+                    onboarding_json='{"pending": true}')
         if email in _admin_emails():
             user.is_admin = True
         db.add(user)
@@ -1270,7 +1309,7 @@ def google_callback(request: Request, code: str = "", state: str = "", db: Sessi
     db.commit()
     request.session.clear()
     request.session["uid"] = user.id
-    return RedirectResponse("/app", status_code=303)
+    return RedirectResponse("/welcome" if (onboarding_of(user) or {}).get("pending") else "/app", status_code=303)
 
 
 # ---------------------------------------------------------------- integratsiyalar (AI, Telegram)

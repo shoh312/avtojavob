@@ -1343,3 +1343,26 @@ def test_home_overview(client):
     assert set(d["kpi"]) == {"in_24h", "out_24h", "contacts_7d", "leads_7d"} and all(len(v) == 2 for v in d["kpi"].values())
     assert {"unread", "closing", "overdue", "unassigned", "human"} <= set(d["attention"])
     assert set(d["sources_7d"]) == {"flow", "ai", "agent", "app", "broadcast"} and len(d["recent"]) <= 6
+
+
+def test_onboarding_wizard(client):
+    plans = client.get("/api/public/plans").json()
+    assert {p["key"] for p in plans["plans"]} >= {"pro", "business"} and plans["trial_days"] == 7
+    from fastapi.testclient import TestClient
+    from app.main import app
+    with TestClient(app) as c2:
+        r = c2.post("/api/auth/register", json={"email": "onb@x.tj", "password": "12345678", "name": "Onb"}, headers=H)
+        assert r.json()["user"]["onboarding"] == {"pending": True}
+        # eski foydalanuvchi (ustun bo'sh) — sehrgar ko'rsatilmaydi
+        from app.main import onboarding_of
+        from app.models import User
+        assert onboarding_of(User(email="old@x.tj", onboarding_json="")) is None
+        u = c2.patch("/api/me", json={"onboarding": {"biz": "courses", "goals": ["leads", "bad"], "about": "Kurslar"}},
+                     headers=H).json()["user"]
+        assert u["onboarding"] == {"pending": True, "biz": "courses", "goals": ["leads"], "about": "Kurslar"}
+        assert c2.patch("/api/me", json={"onboarding": {"biz": "nope"}}, headers=H).json()["user"]["onboarding"]["biz"] == "courses"
+        u = c2.patch("/api/me", json={"onboarding": {"done": True}}, headers=H).json()["user"]
+        assert u["onboarding"]["pending"] is False
+        # Instagram ulash: sehrgardan kelsa — qaytish manzili eslab qolinadi
+        r = c2.get("/instagram/connect?next=welcome", follow_redirects=False)
+        assert r.status_code in (302, 303)
