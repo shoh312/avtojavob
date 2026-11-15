@@ -66,3 +66,16 @@
 .reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s ease, transform .7s cubic-bezier(.2,.8,.2,1); }
 .reveal.in { opacity: 1; transform: none; }
 @media (prefers-reduced-motion: reduce) { .animate-marquee, .typing-dot, .animate-float { animation: none; } .reveal { opacity: 1; transform: none; } }
+
+/* onboarding slaydlari */
+@keyframes slide-in-r { from { opacity: 0; transform: translateX(70px) scale(.98); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes slide-in-l { from { opacity: 0; transform: translateX(-70px) scale(.98); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+.slide-in-r { animation: slide-in-r .55s cubic-bezier(.2,.85,.25,1) both; }
+.slide-in-l { animation: slide-in-l .55s cubic-bezier(.2,.85,.25,1) both; }
+@keyframes blob { 0%,100% { transform: translate(0,0) scale(1); } 33% { transform: translate(40px,-50px) scale(1.08); } 66% { transform: translate(-30px,30px) scale(.94); } }
+.animate-blob { animation: blob 18s ease-in-out infinite; }
+@keyframes confetti { 0% { transform: translateY(-30px) rotate(0); opacity: 0; } 10% { opacity: 1; } 100% { transform: translateY(260px) rotate(720deg); opacity: 0; } }
+.confetti { animation: confetti 2.6s cubic-bezier(.3,.6,.4,1) both; }
+@keyframes pop-in { 0% { transform: scale(.4); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); } }
+.pop-in { animation: pop-in .6s cubic-bezier(.2,.9,.3,1.3) both; }
+@media (prefers-reduced-motion: reduce) { .slide-in-r, .slide-in-l, .animate-blob, .confetti, .pop-in { animation: none; } }
