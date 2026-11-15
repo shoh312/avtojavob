@@ -234,7 +234,7 @@ export default function Home() {
               {attention.map(x => (
                 <Link key={x.label} to={x.to} className="group flex items-center gap-3 rounded-2xl px-2 py-2 transition hover:bg-soft">
                   <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${x.tone}`}><x.icon className="h-4 w-4" /></span>
-                  <span className="flex-1 text-[13px] text-ink-2">{t(x.label)}</span>
+                  <span className="min-w-0 flex-1 text-[13px] text-ink-2">{t(x.label)}</span>
                   <span className="text-[17px] font-extrabold tabular-nums">{x.n}</span>
                   <ArrowRight className="h-4 w-4 text-ink-4 transition group-hover:translate-x-0.5" />
                 </Link>
@@ -259,7 +259,7 @@ export default function Home() {
               <div className="mt-4 flex h-3 overflow-hidden rounded-full bg-soft">
                 {srcItems.filter(x => x.n).map(x => <div key={x.k} className={`${x.color} h-full transition-all duration-700`} style={{ width: `${(x.n / srcTotal) * 100}%` }} title={`${t(x.label)}: ${x.n}`} />)}
               </div>
-              <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
                 {srcItems.map(x => (
                   <div key={x.k} className="flex items-center gap-2 rounded-xl bg-soft px-3 py-2">
                     <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${x.color}`} />

@@ -215,7 +215,7 @@ export default function AppLayout() {
       <main className="lg:pl-[260px]">
         {loc.pathname.startsWith('/app/inbox')
           ? <Outlet />
-          : <div className={`${loc.pathname.startsWith('/app/crm') ? '' : 'mx-auto max-w-6xl '}px-4 py-8 sm:px-8 sm:py-10`}><PlanBanner /><VerifyBanner /><Outlet /></div>}
+          : <div className={`${loc.pathname.startsWith('/app/crm') ? '' : 'mx-auto max-w-6xl '}px-4 py-5 sm:px-8 sm:py-10`}><PlanBanner /><VerifyBanner /><Outlet /></div>}
       </main>
     </div>
   )

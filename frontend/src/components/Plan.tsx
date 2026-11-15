@@ -38,12 +38,12 @@ export function PlanBanner() {
   if (p.active && p.plan !== 'trial') return null
   const expired = !p.active
   return (
-    <div className={`mb-6 flex flex-col gap-3 rounded-2xl px-4 py-3 sm:flex-row sm:items-center ${expired ? 'bg-brand-600 text-white' : 'border border-amber-200 bg-amber-50 text-amber-900'}`}>
-      <div className="flex flex-1 items-center gap-2.5 text-[14px] font-medium">
+    <div className={`mb-5 flex items-center gap-3 rounded-2xl py-2 pl-3.5 pr-2 sm:mb-6 sm:px-4 sm:py-3 ${expired ? 'bg-brand-600 text-white' : 'border border-amber-200 bg-amber-50 text-amber-900'}`}>
+      <div className="flex min-w-0 flex-1 items-center gap-2.5 text-[13px] font-medium leading-snug sm:text-[14px]">
         {expired ? <AlertTriangle className="h-4 w-4 shrink-0" /> : <Gift className="h-4 w-4 shrink-0" />}
         {expired ? t('banner.expired') : t('banner.trial', { n: p.days_left })}
       </div>
-      <Link to="/app/billing" className={`inline-flex h-9 items-center justify-center rounded-xl px-4 text-[13px] font-semibold ${expired ? 'bg-white text-brand-700 hover:bg-brand-50' : 'bg-amber-900 text-white hover:bg-black'}`}>
+      <Link to="/app/billing" className={`inline-flex h-9 shrink-0 items-center justify-center rounded-xl px-3 text-[13px] font-semibold sm:px-4 ${expired ? 'bg-white text-brand-700 hover:bg-brand-50' : 'bg-amber-900 text-white hover:bg-black'}`}>
         {t('banner.cta')}
       </Link>
     </div>

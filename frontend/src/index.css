@@ -6,6 +6,11 @@
   html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
   body { @apply bg-white text-ink font-sans; font-feature-settings: 'cv11', 'ss01'; }
   ::selection { @apply bg-brand-100 text-brand-900; }
+  /* grid kataklari uzun matn tufayli ekrandan toshmasin (telefon) */
+  .grid > * { min-width: 0; }
+  html, body { overflow-x: clip; }
+  /* iPhone: 16px dan kichik maydonga bosilganda sahifa kattalashib ketmasin */
+  @media (max-width: 639px) { input, textarea, select { font-size: 16px !important; } }
 }
 
 @layer components {

@@ -32,7 +32,7 @@ function Chip({ active, onClick, children, dot }: { active: boolean; onClick: ()
 
 function Step({ n, title, children, right }: { n: number; title: string; children: ReactNode; right?: ReactNode }) {
   return (
-    <div className="relative pl-10">
+    <div className="relative pl-9 sm:pl-10">
       <span className="absolute left-0 top-0 grid h-7 w-7 place-items-center rounded-full bg-brand-50 text-[12.5px] font-bold text-brand-700">{n}</span>
       <div className="mb-3 flex min-h-7 items-center justify-between gap-2">
         <h3 className="text-[14.5px] font-bold">{title}</h3>
@@ -122,8 +122,8 @@ export default function Broadcasts() {
       <PageHeader title={t('bc.title')} sub={t('bc.sub')} />
 
       {/* 24 soatlik oyna + statistika */}
-      <div className="mb-6 grid gap-3 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
-        <div className="card relative overflow-hidden p-5">
+      <div className="mb-6 grid grid-cols-3 gap-2.5 sm:gap-3 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
+        <div className="card relative col-span-3 overflow-hidden p-5 md:col-span-1">
           <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-brand-50" />
           <div className="relative flex items-center gap-4">
             <div className="relative grid h-16 w-16 shrink-0 place-items-center">
@@ -152,11 +152,11 @@ export default function Broadcasts() {
           { icon: Send, label: t('bc2.s_sent'), value: stats?.sent ?? '…' },
           { icon: MessageCircleReply, label: t('bc2.s_rate'), value: stats ? `${stats.reply_rate}%` : '…', sub: stats?.replies ? `${stats.replies}` : '' },
         ].map(s => (
-          <div key={s.label} className="card flex flex-col justify-between p-5">
+          <div key={s.label} className="card flex flex-col justify-between p-3.5 sm:p-5">
             <s.icon className="h-4 w-4 text-ink-4" />
-            <div className="mt-4">
-              <div className="text-[24px] font-extrabold tracking-tight">{s.value}{s.sub && <span className="ml-1.5 text-[13px] font-medium text-ink-4">· {s.sub}</span>}</div>
-              <div className="text-[12.5px] text-ink-3">{s.label}</div>
+            <div className="mt-3 sm:mt-4">
+              <div className="text-[20px] font-extrabold tracking-tight sm:text-[24px]">{s.value}{s.sub && <span className="ml-1.5 text-[13px] font-medium text-ink-4">· {s.sub}</span>}</div>
+              <div className="text-[11.5px] leading-snug text-ink-3 sm:text-[12.5px]">{s.label}</div>
             </div>
           </div>
         ))}

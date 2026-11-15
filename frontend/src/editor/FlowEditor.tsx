@@ -48,7 +48,7 @@ function Editor({ flow }: { flow: FlowFull }) {
 
   const snapshot = useMemo(() => serialize(name, nodes, edges), [name, nodes, edges])
   const savedRef = useRef(snapshot)
-  const [palOpen, setPalOpen] = useState(() => { try { return localStorage.getItem('cf.pal') !== '0' } catch { return true } })
+  const [palOpen, setPalOpen] = useState(() => { if (window.innerWidth < 640) return false; try { return localStorage.getItem('cf.pal') !== '0' } catch { return true } })
 
   // --- bekor qilish / qaytarish (Ctrl+Z / Ctrl+Shift+Z)
   const hist = useRef({ past: [] as string[], future: [] as string[], last: snapshot, restoring: false })
@@ -259,10 +259,10 @@ function Editor({ flow }: { flow: FlowFull }) {
 
   return (
     <EditorCtx.Provider value={{ stats, errors: errorsByNode, active: activeNode, actions }}>
-      <div className="flex h-screen flex-col bg-soft">
+      <div className="flex h-dvh flex-col bg-soft">
         {/* yuqori panel */}
-        <header className="z-20 flex h-14 shrink-0 items-center gap-3 border-b border-line bg-white px-3 sm:px-4">
-          <Link to="/app/flows" className="rounded-lg p-2 text-ink-3 hover:bg-soft hover:text-ink"><ArrowLeft className="h-5 w-5" /></Link>
+        <header className="z-20 flex h-14 shrink-0 items-center gap-1.5 border-b sm:gap-3 border-line bg-white px-3 sm:px-4">
+          <Link to="/app/flows" className="shrink-0 rounded-lg p-2 text-ink-3 hover:bg-soft hover:text-ink"><ArrowLeft className="h-5 w-5" /></Link>
           <input value={name} onChange={e => setName(e.target.value)} placeholder={t('ed.name_ph')}
             className="min-w-0 max-w-[340px] flex-1 rounded-lg bg-transparent px-2 py-1.5 text-[15px] font-semibold outline-none hover:bg-soft focus:bg-soft" />
           <span className="hidden items-center gap-1.5 text-[12.5px] text-ink-3 sm:flex">
@@ -270,14 +270,14 @@ function Editor({ flow }: { flow: FlowFull }) {
               : save === 'dirty' ? <><span className="h-1.5 w-1.5 rounded-full bg-amber-400" />{t('ed.unsaved')}</>
               : <><Check className="h-3.5 w-3.5 text-emerald-500" />{t('ed.saved')}</>}
           </span>
-          <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-3">
             {errCount > 0 && (
               <div className="relative">
                 <button onClick={() => setShowErrors(s => !s)} className="flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-[12.5px] font-semibold text-brand-700">
-                  <AlertCircle className="h-4 w-4" />{t('ed.errors', { n: errCount })}
+                  <AlertCircle className="h-4 w-4" /><span className="hidden sm:inline">{t('ed.errors', { n: errCount })}</span><span className="sm:hidden">{errCount}</span>
                 </button>
                 {showErrors && (
-                  <div className="absolute right-0 top-full z-30 mt-2 w-80 rounded-2xl border border-line bg-white p-2 shadow-pop">
+                  <div className="absolute right-0 top-full z-30 mt-2 w-[min(20rem,calc(100vw-24px))] rounded-2xl border border-line bg-white p-2 shadow-pop">
                     {errors.map((e, i) => (
                       <button key={i} onClick={() => { if (e.node) focusNode(e.node); setShowErrors(false) }}
                         className="flex w-full items-start gap-2 rounded-xl px-3 py-2 text-left text-[13px] hover:bg-soft">
@@ -290,12 +290,12 @@ function Editor({ flow }: { flow: FlowFull }) {
               </div>
             )}
             <button onClick={() => (sim ? (setSim(null), setActiveNode(null)) : testFrom(null))}
-              className={`group inline-flex h-9 items-center gap-2 rounded-xl border pl-1.5 pr-3.5 text-[13px] font-semibold transition ${sim ? 'border-ink bg-ink text-white' : 'border-line bg-white text-ink hover:border-[#d0d0d6] hover:bg-soft'}`}>
+              className={`group inline-flex h-9 items-center gap-2 rounded-xl border pl-1.5 pr-1.5 text-[13px] font-semibold transition sm:pr-3.5 ${sim ? 'border-ink bg-ink text-white' : 'border-line bg-white text-ink hover:border-[#d0d0d6] hover:bg-soft'}`}>
               <span className={`grid h-6 w-6 place-items-center rounded-lg ${sim ? 'bg-white/15' : 'bg-ink text-white'}`}><Play className="h-3 w-3 fill-current" /></span>
-              {t('sim.test')}
+              <span className="hidden sm:inline">{t('sim.test')}</span>
             </button>
-            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-line px-3 py-1.5">
-              <span className={`text-[13px] font-semibold ${active ? 'text-brand-700' : 'text-ink-3'}`}>{active ? t('ed.activate') : t('common.draft')}</span>
+            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-line px-2 py-1.5 sm:px-3">
+              <span className={`hidden text-[13px] font-semibold sm:inline ${active ? 'text-brand-700' : 'text-ink-3'}`}>{active ? t('ed.activate') : t('common.draft')}</span>
               <Toggle checked={active} onChange={toggleActive} size="sm" />
             </label>
           </div>
@@ -318,7 +318,7 @@ function Editor({ flow }: { flow: FlowFull }) {
             </ReactFlow>
 
             {/* bloklar paneli */}
-            <div className="absolute left-3 top-3 z-10 w-[212px] rounded-2xl border border-line bg-white/95 p-1.5 shadow-pop backdrop-blur sm:left-4 sm:top-4">
+            <div className="absolute left-3 top-3 z-10 w-[min(212px,calc(100%-24px))] rounded-2xl border border-line bg-white/95 p-1.5 shadow-pop backdrop-blur sm:left-4 sm:top-4">
               <button onClick={() => setPalOpen(o => { try { localStorage.setItem('cf.pal', o ? '0' : '1') } catch { /* */ } return !o })}
                 className="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left hover:bg-soft">
                 <span className="grid h-6 w-6 place-items-center rounded-lg bg-brand-600 text-white"><Plus className="h-3.5 w-3.5" strokeWidth={2.6} /></span>
@@ -334,7 +334,7 @@ function Editor({ flow }: { flow: FlowFull }) {
                         const Icon = it.icon
                         return (
                           <button key={it.key} draggable onDragStart={e => { e.dataTransfer.setData('application/chatflow', it.key); e.dataTransfer.effectAllowed = 'move' }}
-                            onClick={() => addItem(it)}
+                            onClick={() => { addItem(it); if (window.innerWidth < 640) setPalOpen(false) }}
                             className="group flex w-full cursor-grab items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-soft active:cursor-grabbing">
                             <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg transition group-hover:scale-105 ${it.tint}`}><Icon className="h-[15px] w-[15px]" /></span>
                             <span className="min-w-0">
@@ -352,17 +352,17 @@ function Editor({ flow }: { flow: FlowFull }) {
             </div>
 
             {/* masshtab */}
-            <div className="absolute bottom-4 left-4 z-10 flex overflow-hidden rounded-xl border border-line bg-white shadow-card">
+            <div className="absolute bottom-4 left-3 z-10 flex overflow-hidden sm:left-4 rounded-xl border border-line bg-white shadow-card">
               <button title={t('ed.zoom_out')} onClick={() => rf.zoomOut({ duration: 200 })} className="p-2.5 text-ink-2 hover:bg-soft"><Minus className="h-4 w-4" /></button>
               <button title={t('ed.zoom_in')} onClick={() => rf.zoomIn({ duration: 200 })} className="border-x border-line p-2.5 text-ink-2 hover:bg-soft"><Plus className="h-4 w-4" /></button>
               <button title={t('ed.fit')} onClick={() => rf.fitView({ padding: 0.3, duration: 300, maxZoom: 1 })} className="p-2.5 text-ink-2 hover:bg-soft"><Maximize2 className="h-4 w-4" /></button>
             </div>
-            <div className="absolute bottom-4 left-[150px] z-10 flex overflow-hidden rounded-xl border border-line bg-white shadow-card">
+            <div className="absolute bottom-4 left-[140px] z-10 sm:left-[150px] flex overflow-hidden rounded-xl border border-line bg-white shadow-card">
               <button title={t('ed.undo')} disabled={!canUndo} onClick={undo} className="p-2.5 text-ink-2 hover:bg-soft disabled:text-ink-4 disabled:hover:bg-transparent"><Undo2 className="h-4 w-4" /></button>
               <button title={t('ed.redo')} disabled={!canRedo} onClick={redo} className="border-l border-line p-2.5 text-ink-2 hover:bg-soft disabled:text-ink-4 disabled:hover:bg-transparent"><Redo2 className="h-4 w-4" /></button>
             </div>
 
-            <div className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-xl border border-line bg-white px-3 py-2 text-[12px] text-ink-3 shadow-card md:hidden">
+            <div className="pointer-events-none absolute bottom-[68px] left-3 right-3 z-10 flex items-center justify-center gap-1.5 rounded-xl border border-line bg-white/90 px-3 py-2 text-[12px] text-ink-3 shadow-card md:hidden">
               <MonitorSmartphone className="h-4 w-4" />{t('ed.desktop')}
             </div>
 

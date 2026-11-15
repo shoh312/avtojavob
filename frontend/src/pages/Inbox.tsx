@@ -305,7 +305,7 @@ function Thread({ id, stages, onBack, onChanged }: { id: number; stages: Stage[]
                 </button>
               </div>
               <div className="mt-1.5 flex justify-between px-1 text-[11px] text-ink-4">
-                <span>{t('inbox2.hint')}</span>
+                <span className="hidden sm:inline">{t('inbox2.hint')}</span>
                 {text.length > 800 && <span className="tabular-nums">{text.length}/1000</span>}
               </div>
             </>
@@ -348,7 +348,7 @@ export default function Inbox() {
   ]
 
   return (
-    <div className="flex h-[calc(100vh-56px)] bg-white lg:h-screen">
+    <div className="flex h-[calc(100dvh-56px)] bg-white lg:h-dvh">
       <aside className={`w-full shrink-0 flex-col border-r border-line md:flex md:w-[340px] ${selected ? 'hidden' : 'flex'}`}>
         <div className="space-y-3 border-b border-line p-4">
           <div className="flex items-center justify-between">

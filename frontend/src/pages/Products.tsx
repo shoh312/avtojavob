@@ -115,10 +115,10 @@ function ProductModal({ product, accountId, onClose, onSaved }: { product: Produ
 
 function Stat({ icon, value, label, accent }: { icon: ReactNode; value: ReactNode; label: string; accent?: string }) {
   return (
-    <div className="rounded-3xl border border-line bg-white p-4">
+    <div className="rounded-2xl border border-line bg-white p-3 sm:rounded-3xl sm:p-4">
       <span className={`grid h-8 w-8 place-items-center rounded-xl ${accent || 'bg-soft text-ink-3'}`}>{icon}</span>
-      <div className="mt-3 text-[24px] font-extrabold tabular-nums tracking-tight">{value}</div>
-      <div className="text-[12.5px] text-ink-3">{label}</div>
+      <div className="mt-2.5 text-[20px] font-extrabold tabular-nums tracking-tight sm:mt-3 sm:text-[24px]">{value}</div>
+      <div className="text-[11.5px] leading-snug text-ink-3 sm:text-[12.5px]">{label}</div>
     </div>
   )
 }
@@ -199,11 +199,11 @@ export default function Products() {
       <PageHeader title={t('prod.title')} sub={t('prod.sub')} action={<Button onClick={() => setEdit('new')}><Plus className="h-4 w-4" />{t('prod.new')}</Button>} />
 
       {/* ko'rsatkichlar + AI holati */}
-      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-[1fr_1fr_1fr_1.5fr]">
+      <div className="mb-5 grid grid-cols-3 gap-2.5 sm:gap-3 lg:grid-cols-[1fr_1fr_1fr_1.5fr]">
         <Stat icon={<Package className="h-4 w-4" />} value={<>{all.filter(p => p.active).length}<span className="ml-1 text-[14px] font-medium text-ink-4">/ {all.length}</span></>} label={t('prod2.active')} />
         <Stat icon={<Send className="h-4 w-4" />} value={sumShown} label={t('prod2.shown')} accent="bg-violet-50 text-violet-600" />
         <Stat icon={<ShoppingCart className="h-4 w-4" />} value={sumOrders} label={t('prod2.orders')} accent="bg-emerald-50 text-emerald-600" />
-        <Link to="/app/integrations?open=ai" className={`col-span-2 flex items-center gap-3 rounded-3xl p-4 transition hover:brightness-[.98] lg:col-span-1 ${ai ? 'bg-gradient-to-br from-[#1b1b22] to-[#2a1530] text-white' : 'border border-dashed border-line bg-white'}`}>
+        <Link to="/app/integrations?open=ai" className={`col-span-3 flex items-center gap-3 rounded-3xl p-4 transition hover:brightness-[.98] lg:col-span-1 ${ai ? 'bg-gradient-to-br from-[#1b1b22] to-[#2a1530] text-white' : 'border border-dashed border-line bg-white'}`}>
           <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl ${ai ? 'bg-gradient-to-br from-[#6d5dfc] to-[#e5161f]' : 'bg-soft text-ink-3'}`}><Sparkles className="h-5 w-5" /></span>
           <span className="min-w-0 flex-1">
             <span className="block text-[14px] font-bold">{ai ? t('prod2.ai_on') : t('prod2.ai_off')}</span>
@@ -243,7 +243,7 @@ export default function Products() {
           {canDrag && all.length > 1 && <p className="mb-3 flex items-center gap-1.5 text-[12px] text-ink-4"><GripVertical className="h-3.5 w-3.5" />{t('prod2.drag')}</p>}
 
           {shown.length === 0 ? <p className="py-12 text-center text-[13.5px] text-ink-4">{t('common.empty')}</p> : view === 'grid' ? (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
               {shown.map(p => (
                 <div key={p.id} draggable={canDrag} onDragStart={() => setDrag(p.id)} onDragOver={e => { e.preventDefault(); onDragOver(p.id) }} onDragEnd={onDragEnd}
                   className={`group relative flex flex-col overflow-hidden rounded-3xl border bg-white transition hover:-translate-y-0.5 hover:shadow-card ${drag === p.id ? 'opacity-40' : ''} ${p.active ? 'border-line' : 'border-dashed border-line'} ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''}`}>
