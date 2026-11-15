@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { Activity, BarChart3, Blocks, KanbanSquare, ShoppingBag, Check, ChevronDown, ChevronsUpDown, UsersRound, CreditCard, Home, Inbox, Instagram, Loader2, LogOut, MailCheck, Megaphone, Menu, Plus, Settings, SlidersHorizontal, UserCog, Workflow, X } from 'lucide-react'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Activity, BarChart3, Blocks, KanbanSquare, ShoppingBag, Check, ChevronDown, ChevronsUpDown, UsersRound, CreditCard, Home, Inbox, Instagram, LogOut, Megaphone, Menu, Plus, Settings, SlidersHorizontal, UserCog, Workflow, X } from 'lucide-react'
 import { useAuth } from '../auth'
 import { useI18n, type TKey } from '../i18n'
-import { api, ApiError } from '../api'
+import { api } from '../api'
 import { Logo } from './Logo'
-import { Avatar, useToast } from './ui'
+import { Avatar } from './ui'
 import { PlanBadge, PlanBanner, planStatus } from './Plan'
 
 type NavItem = { to: string; key: TKey; icon: typeof Home; end?: boolean; owner?: boolean }
@@ -171,8 +171,9 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 /** 6 xonali kod maydoni: har raqam alohida katak, nusxa qo'yish (paste) ham ishlaydi. */
-export function OtpInput({ value, onChange, onDone, disabled }: { value: string; onChange: (v: string) => void; onDone?: (v: string) => void; disabled?: boolean }) {
+export function OtpInput({ value, onChange, onDone, disabled, autoFocus }: { value: string; onChange: (v: string) => void; onDone?: (v: string) => void; disabled?: boolean; autoFocus?: boolean }) {
   const refs = useRef<(HTMLInputElement | null)[]>([])
+  useEffect(() => { if (autoFocus) refs.current[0]?.focus() }, [autoFocus])
   const set = (v: string) => {
     const clean = v.replace(/\D/g, '').slice(0, 6)
     onChange(clean)
@@ -199,79 +200,6 @@ export function OtpInput({ value, onChange, onDone, disabled }: { value: string;
   )
 }
 
-function VerifyBanner() {
-  const { t } = useI18n()
-  const toast = useToast()
-  const { me, setMe } = useAuth()
-  const [params, setParams] = useSearchParams()
-  const [code, setCode] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const [wait, setWait] = useState(0)
-  // eski havolalar (verify-email) natijasi
-  useEffect(() => {
-    const v = params.get('verified')
-    if (v === null) return
-    if (v === '1') toast(t('verify.ok')); else toast(t('err.token_invalid'), 'error')
-    params.delete('verified')
-    setParams(params, { replace: true })
-  }, [params]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (wait <= 0) return
-    const id = window.setTimeout(() => setWait(w => w - 1), 1000)
-    return () => window.clearTimeout(id)
-  }, [wait])
-  if (!me || me.user.email_verified || !me.features?.email) return null
-
-  const submit = async (c = code) => {
-    if (c.length !== 6 || busy) return
-    setBusy(true); setError('')
-    try {
-      const r = await api.post<{ user: typeof me.user }>('/api/auth/verify', { code: c })
-      setMe({ ...me, user: r.user })
-      toast(t('verify.ok'))
-    } catch (e) {
-      const k = e instanceof ApiError ? e.code : ''
-      setError(['code_invalid', 'code_expired', 'code_too_many'].includes(k) ? t(`err.${k}` as TKey) : t('common.error'))
-      setCode('')
-    } finally { setBusy(false) }
-  }
-  const resend = async () => {
-    try {
-      const r = await api.post<{ ok: boolean; wait?: number }>('/api/auth/verify/send')
-      setWait(r.wait || 60); setError('')
-      if (r.ok) toast(t('verify.sent'))
-    } catch { toast(t('common.error'), 'error') }
-  }
-  return (
-    <div className="mb-6 overflow-hidden rounded-3xl border border-line bg-white">
-      <div className="flex flex-col gap-5 p-5 sm:p-6 lg:flex-row lg:items-center">
-        <div className="flex min-w-0 flex-1 items-start gap-3.5">
-          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-brand-50 text-brand-600"><MailCheck className="h-5 w-5" /></span>
-          <div className="min-w-0">
-            <div className="text-[15.5px] font-bold">{t('verify.code_t')}</div>
-            <div className="mt-0.5 break-words text-[13.5px] leading-snug text-ink-3">{t('verify.code_d', { email: me.user.email })}</div>
-            {error && <div className="mt-1.5 text-[13px] font-semibold text-brand-700">{error}</div>}
-          </div>
-        </div>
-        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
-          <OtpInput value={code} onChange={v => { setCode(v); setError('') }} onDone={submit} disabled={busy} />
-          <button disabled={busy || code.length !== 6} onClick={() => submit()}
-            className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-brand-600 px-5 text-[14px] font-semibold text-white transition hover:bg-brand-700 disabled:opacity-40 sm:h-14">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}{t('verify.confirm')}
-          </button>
-        </div>
-      </div>
-      <div className="flex items-center justify-between gap-3 border-t border-line bg-soft/60 px-5 py-2.5 text-[12.5px] text-ink-3 sm:px-6">
-        <span>{t('verify.spam')}</span>
-        <button disabled={wait > 0} onClick={resend} className="shrink-0 font-semibold text-brand-600 hover:text-brand-700 disabled:text-ink-4">
-          {wait > 0 ? t('verify.resend_in', { s: `0:${String(wait).padStart(2, '0')}` }) : t('verify.resend')}
-        </button>
-      </div>
-    </div>
-  )
-}
-
 export default function AppLayout() {
   const [mobile, setMobile] = useState(false)
   const loc = useLocation()
@@ -294,7 +222,7 @@ export default function AppLayout() {
       <main className="lg:pl-[260px]">
         {loc.pathname.startsWith('/app/inbox')
           ? <Outlet />
-          : <div className={`${loc.pathname.startsWith('/app/crm') ? '' : 'mx-auto max-w-6xl '}px-4 py-5 sm:px-8 sm:py-10`}><PlanBanner /><VerifyBanner /><Outlet /></div>}
+          : <div className={`${loc.pathname.startsWith('/app/crm') ? '' : 'mx-auto max-w-6xl '}px-4 py-5 sm:px-8 sm:py-10`}><PlanBanner /><Outlet /></div>}
       </main>
     </div>
   )

@@ -9,6 +9,7 @@ import { Spinner, ToastProvider } from './components/ui'
 import AppLayout from './components/AppLayout'
 import Landing from './pages/Landing'
 import Welcome from './pages/Welcome'
+import Verify from './pages/Verify'
 import AuthPage from './pages/Auth'
 import Home from './pages/Home'
 import Flows from './pages/Flows'
@@ -34,6 +35,7 @@ function Protected({ children }: { children: JSX.Element }) {
   const { me, loading } = useAuth()
   if (loading) return <Spinner className="min-h-screen" />
   if (!me) return <Navigate to="/login" replace />
+  if (me.verify_required) return <Navigate to="/verify" replace />  // avval email kod bilan tasdiqlanadi
   return children
 }
 
@@ -76,6 +78,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/register" element={<GuestOnly><AuthPage mode="register" /></GuestOnly>} />
               <Route path="/forgot" element={<GuestOnly><Forgot /></GuestOnly>} />
               <Route path="/reset" element={<Reset />} />
+              <Route path="/verify" element={<Verify />} />
               <Route path="/welcome" element={<Protected><Welcome /></Protected>} />
               <Route path="/app/flows/:id" element={<Protected><FlowEditor /></Protected>} />
               <Route path="/app" element={<Protected><Onboarded><AppLayout /></Onboarded></Protected>}>

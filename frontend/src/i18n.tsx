@@ -151,7 +151,7 @@ const en = {
   // sozlamalar
   'set.title': 'Settings', 'set.profile': 'Profile', 'set.language': 'Language', 'set.password': 'Change password',
   'set.current_pw': 'Current password', 'set.new_pw': 'New password', 'set.saved': 'Settings saved',
-  'verify.code_t': 'Confirm your email', 'verify.code_d': 'We sent a 6-digit code to {email}. Enter it here.', 'verify.confirm': 'Confirm', 'verify.resend_in': 'Resend in {s}', 'verify.spam': 'No email? Check the Spam folder.',
+  'verify.code_lead': 'We sent a 6-digit code to', 'verify.other': 'Use a different account', 'verify.code_t': 'Confirm your email', 'verify.code_d': 'We sent a 6-digit code to {email}. Enter it here.', 'verify.confirm': 'Confirm', 'verify.resend_in': 'Resend in {s}', 'verify.spam': 'No email? Check the Spam folder.',
   'err.code_invalid': 'Wrong code — check and try again', 'err.code_expired': 'The code has expired — request a new one', 'err.code_too_many': 'Too many attempts — request a new code',
   'set.daily_t': 'Daily email report', 'set.daily_d': 'Every morning: messages, auto-replies, new customers and leads for the last 24 hours.',
   "home2.morning": "Good morning",
@@ -1079,7 +1079,7 @@ const ru: Dict = {
 
   'set.title': 'Настройки', 'set.profile': 'Профиль', 'set.language': 'Язык', 'set.password': 'Сменить пароль',
   'set.current_pw': 'Текущий пароль', 'set.new_pw': 'Новый пароль', 'set.saved': 'Настройки сохранены',
-  'verify.code_t': 'Подтвердите email', 'verify.code_d': 'Мы отправили 6-значный код на {email}. Введите его здесь.', 'verify.confirm': 'Подтвердить', 'verify.resend_in': 'Повторно через {s}', 'verify.spam': 'Нет письма? Проверьте папку «Спам».',
+  'verify.code_lead': 'Мы отправили 6-значный код на', 'verify.other': 'Войти в другой аккаунт', 'verify.code_t': 'Подтвердите email', 'verify.code_d': 'Мы отправили 6-значный код на {email}. Введите его здесь.', 'verify.confirm': 'Подтвердить', 'verify.resend_in': 'Повторно через {s}', 'verify.spam': 'Нет письма? Проверьте папку «Спам».',
   'err.code_invalid': 'Неверный код — проверьте и попробуйте ещё раз', 'err.code_expired': 'Срок кода истёк — запросите новый', 'err.code_too_many': 'Слишком много попыток — запросите новый код',
   'set.daily_t': 'Ежедневный отчёт на email', 'set.daily_d': 'Каждое утро: сообщения, автоответы, новые клиенты и заявки за сутки.',
   "home2.morning": "Доброе утро",
@@ -2005,7 +2005,7 @@ const uz: Dict = {
 
   'set.title': 'Sozlamalar', 'set.profile': 'Profil', 'set.language': 'Til', 'set.password': "Parolni o'zgartirish",
   'set.current_pw': 'Joriy parol', 'set.new_pw': 'Yangi parol', 'set.saved': 'Sozlamalar saqlandi',
-  'verify.code_t': 'Emailingizni tasdiqlang', 'verify.code_d': '{email} manziliga 6 xonali kod yubordik. Uni shu yerga kiriting.', 'verify.confirm': 'Tasdiqlash', 'verify.resend_in': '{s} dan keyin qayta', 'verify.spam': 'Xat kelmadimi? «Spam» papkasini tekshiring.',
+  'verify.code_lead': '6 xonali kodni ushbu manzilga yubordik:', 'verify.other': 'Boshqa akkauntga kirish', 'verify.code_t': 'Emailingizni tasdiqlang', 'verify.code_d': '{email} manziliga 6 xonali kod yubordik. Uni shu yerga kiriting.', 'verify.confirm': 'Tasdiqlash', 'verify.resend_in': '{s} dan keyin qayta', 'verify.spam': 'Xat kelmadimi? «Spam» papkasini tekshiring.',
   'err.code_invalid': "Kod noto'g'ri — tekshirib qayta urinib ko'ring", 'err.code_expired': "Kod muddati tugadi — yangisini so'rang", 'err.code_too_many': "Urinishlar ko'p — yangi kod so'rang",
   'set.daily_t': 'Har kuni emailga hisobot', 'set.daily_d': "Har tong: so'nggi 24 soatdagi xabarlar, avtojavoblar, yangi mijozlar va arizalar.",
   "home2.morning": "Xayrli tong",
@@ -2931,7 +2931,7 @@ const tj: Dict = {
 
   'set.title': 'Танзимот', 'set.profile': 'Профил', 'set.language': 'Забон', 'set.password': 'Иваз кардани парол',
   'set.current_pw': 'Пароли ҷорӣ', 'set.new_pw': 'Пароли нав', 'set.saved': 'Танзимот нигоҳ дошта шуд',
-  'verify.code_t': 'Email-ро тасдиқ кунед', 'verify.code_d': 'Ба {email} рамзи 6-рақама фиристодем. Онро дар ин ҷо ворид кунед.', 'verify.confirm': 'Тасдиқ', 'verify.resend_in': 'Такрор пас аз {s}', 'verify.spam': 'Мактуб наомад? Ҷузвдони «Спам»-ро санҷед.',
+  'verify.code_lead': 'Рамзи 6-рақамаро ба ин суроға фиристодем:', 'verify.other': 'Ворид шудан ба аккаунти дигар', 'verify.code_t': 'Email-ро тасдиқ кунед', 'verify.code_d': 'Ба {email} рамзи 6-рақама фиристодем. Онро дар ин ҷо ворид кунед.', 'verify.confirm': 'Тасдиқ', 'verify.resend_in': 'Такрор пас аз {s}', 'verify.spam': 'Мактуб наомад? Ҷузвдони «Спам»-ро санҷед.',
   'err.code_invalid': 'Рамз нодуруст — санҷида бори дигар кӯшиш кунед', 'err.code_expired': 'Мӯҳлати рамз гузашт — рамзи нав дархост кунед', 'err.code_too_many': 'Кӯшишҳо зиёд — рамзи нав дархост кунед',
   'set.daily_t': 'Ҳисоботи ҳаррӯза ба email', 'set.daily_d': 'Ҳар субҳ: паёмҳо, ҷавобҳои худкор, мизоҷони нав ва дархостҳо дар 24 соат.',
   "home2.morning": "Субҳ ба хайр",

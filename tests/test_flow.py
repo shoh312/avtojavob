@@ -536,10 +536,12 @@ def test_password_reset_and_verify(client, monkeypatch):
         to, text = mails[-1]
         code = _re.search(r"(\d{6})", text).group(1)  # matnda kod alohida qatorda
         assert to == "otp@x.tj" and not c3.get("/api/me").json()["user"]["email_verified"]
+        assert c3.get("/api/me").json()["verify_required"] is True  # panelga kirishdan oldin kod so'raladi
         assert c3.post("/api/auth/verify/send", headers=H).json()["wait"] > 0  # darhol qayta yuborilmaydi
         wrong = "000000" if code != "000000" else "111111"
         assert c3.post("/api/auth/verify", json={"code": wrong}, headers=H).json()["error"] == "code_invalid"
         assert c3.post("/api/auth/verify", json={"code": code}, headers=H).json()["user"]["email_verified"] is True
+        assert c3.get("/api/me").json()["verify_required"] is False
         # 5 ta noto'g'ri urinishdan keyin kod bloklanadi
         from app import reports
         from app.models import User as _U

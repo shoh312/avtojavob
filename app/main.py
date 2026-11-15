@@ -302,10 +302,17 @@ def logout(request: Request):
     return {"ok": True}
 
 
+def verify_required(db: Session, user: User) -> bool:
+    """Kirishdan oldin email kod bilan tasdiqlanishi kerakmi (SMTP bor, egasi, hali tasdiqlanmagan).
+    Jamoa a'zolari va adminlar istisno — pochta ishlamay qolsa ham kira olishlari uchun."""
+    return bool(not user.email_verified and not user.is_manager and not user.is_admin and services.smtp_config(db))
+
+
 @app.get("/api/me")
 def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
     return {"user": user_json(user), "accounts": [account_json(a) for a in user.workspace.accounts],
             "ig_ready": settings.ig_ready, "telegram": get_setting(db, "telegram_username"),
+            "verify_required": verify_required(db, user),
             "features": {"email": bool(services.smtp_config(db)), "ai": services.ai_available(db)}}
 
 
