@@ -1,4 +1,5 @@
 import asyncio
+from html import escape as html_escape
 import csv
 import io
 import json
@@ -16,7 +17,7 @@ import httpx
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, RedirectResponse,
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse,
                                StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -25,7 +26,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import instagram as ig
-from . import aimanager, catalog, crm, services, tgbot
+from . import aimanager, catalog, crm, reports, services, tgbot
 from .config import settings
 from .db import get_db, init_db
 from .engine import contact_card as engine_contact_card
@@ -62,6 +63,8 @@ async def _background_loops():
             await asyncio.to_thread(run_due_reminders)
             if tick % 10 == 0:  # ~5 daqiqada bir
                 await asyncio.to_thread(aimanager.run_followups)
+            if tick % 20 == 0:  # ~10 daqiqada bir: kunlik email hisobot (vaqti kelganlarga)
+                await asyncio.to_thread(reports.run_daily)
             if tick % 720 == 0:  # ~6 soatda bir
                 await asyncio.to_thread(refresh_expiring_tokens)
         except Exception:
@@ -196,7 +199,8 @@ def user_json(u: User) -> dict:
     return {"id": u.id, "email": u.email, "name": u.name, "lang": u.lang, "is_admin": u.is_admin,
             "plan": plan_json(u.workspace), "email_verified": u.email_verified,
             "role": "manager" if u.is_manager else "owner", "avatar_url": avatar_url(u),
-            "google": bool(u.google_sub), "created_at": iso(u.created_at), "onboarding": onboarding_of(u)}
+            "google": bool(u.google_sub), "created_at": iso(u.created_at), "onboarding": onboarding_of(u),
+            "daily_report": u.daily_report}
 
 
 def onboarding_of(u: User) -> dict | None:
@@ -274,7 +278,7 @@ def register(request: Request, background: BackgroundTasks, body: dict = Body(..
     request.session["uid"] = user.id
     cfg = services.smtp_config(db)
     if cfg:
-        _send_verify(background, cfg, user)
+        _send_verify(background, cfg, user, db)
     return {"user": user_json(user)}
 
 
@@ -331,6 +335,8 @@ def update_me(body: dict = Body(...), user: User = Depends(current_user), db: Se
         user.avatar = new
         if old and old != new:
             (UPLOAD_DIR / old).unlink(missing_ok=True)
+    if "daily_report" in body:
+        user.daily_report = bool(body["daily_report"])
     if isinstance(body.get("onboarding"), dict) and onboarding_of(user) is not None:
         o, cur = body["onboarding"], onboarding_of(user) or {}
         if o.get("biz") in ONB_BIZ:
@@ -1174,11 +1180,12 @@ def _mail_bg(cfg: dict, to: str, subject: str, text: str, html: str) -> None:
         log.exception("email yuborilmadi: %s", to)
 
 
-def _send_verify(background: BackgroundTasks, cfg: dict, user: User) -> None:
-    tx = EMAIL_TEXT.get(user.lang, EMAIL_TEXT["en"])
-    url = f"{settings.APP_URL}/verify-email?token={_signer.dumps({'k': 'verify', 'uid': user.id, 'e': user.email})}"
-    background.add_task(_mail_bg, cfg, user.email, tx["verify_s"], f"{tx['verify_b']}\n\n{url}",
-                        services.email_html(tx["verify_t"], tx["verify_b"], tx["verify_btn"], url))
+def _send_verify(background: BackgroundTasks, cfg: dict, user: User, db: Session) -> None:
+    """Emailga 6 xonali tasdiqlash kodi yuboradi (15 daqiqa amal qiladi)."""
+    code = reports.new_code(user)
+    db.commit()
+    subject, text, body = reports.code_email(user.lang, code)
+    background.add_task(_mail_bg, cfg, user.email, subject, text, body)
 
 
 def _untoken(token: str, kind: str, max_age: int) -> dict:
@@ -1236,8 +1243,40 @@ def verify_send(background: BackgroundTasks, user: User = Depends(current_user),
     cfg = services.smtp_config(db)
     if not cfg:
         err("email_disabled")
-    _send_verify(background, cfg, user)
-    return {"ok": True}
+    if user.email_verified:
+        return {"ok": True, "verified": True}
+    wait = reports.resend_wait(user)
+    if wait:
+        return {"ok": False, "wait": wait}
+    _send_verify(background, cfg, user, db)
+    return {"ok": True, "wait": int(reports.CODE_RESEND.total_seconds())}
+
+
+@app.post("/api/auth/verify")
+def verify_code(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Emailga yuborilgan 6 xonali kod bilan tasdiqlash."""
+    if user.email_verified:
+        return {"user": user_json(user)}
+    problem = reports.check_code(user, str(body.get("code") or ""))
+    if problem:
+        db.commit()  # urinishlar soni saqlanadi
+        err(problem)
+    user.email_verified = True
+    db.commit()
+    return {"user": user_json(user)}
+
+
+@app.get("/email/unsubscribe", response_class=HTMLResponse)
+def email_unsubscribe(token: str = "", db: Session = Depends(get_db)):
+    user = reports.unsubscribe(db, token)
+    t = reports.tx(user.lang if user else "ru")
+    msg = t["unsub_ok"] if user else "Link is invalid."
+    return HTMLResponse(f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ChatFlow</title><body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#f4f4f6;font-family:Inter,Arial,sans-serif">
+<div style="background:#fff;border-radius:24px;padding:36px 28px;max-width:420px;margin:16px;text-align:center;color:#111114">
+<div style="font-size:22px;font-weight:800;font-style:italic">Chat<span style="color:#e5161f">Flow</span></div>
+<p style="font-size:15px;line-height:1.6;color:#3a3a42;margin:18px 0 22px">{html_escape(msg)}</p>
+<a href="/app/settings" style="display:inline-block;background:#e5161f;color:#fff;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:12px">ChatFlow →</a></div></body>""")
 
 
 @app.get("/verify-email")

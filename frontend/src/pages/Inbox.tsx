@@ -339,7 +339,7 @@ export default function Inbox() {
   useEffect(() => { load(); const timer = setInterval(load, 6000); return () => clearInterval(timer) }, [load])
   useEffect(() => { if (account) api.get<{ stages: Stage[] }>(`/api/crm/stages?account_id=${account.id}`).then(r => setStages(r.stages)).catch(() => {}) }, [account])
 
-  if (!account) return <Onboarding />
+  if (!account) return <Onboarding page />
   const pick = (id: number | null) => setParams(id ? { c: String(id) } : {}, { replace: true })
   const stageOf = (id: string | null) => stages.find(s => s.id === id)
   const TABS: { k: Tab; icon: typeof InboxIcon; label: TKey }[] = [

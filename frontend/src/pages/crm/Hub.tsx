@@ -37,7 +37,7 @@ export default function CrmHub() {
   useEffect(() => { refresh() }, [refresh])
   const bump = () => { refresh(); setTick(x => x + 1) }
 
-  if (!account) return <Onboarding />
+  if (!account) return <Onboarding page />
 
   const go = (v: View, extra: Record<string, string> = {}) => {
     const p = new URLSearchParams()

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowRight, BadgeCheck, Camera, Check, CreditCard, Eye, EyeOff, Globe2, KeyRound, Loader2, LogOut, MailWarning, ShieldCheck, Trash2, UserRound } from 'lucide-react'
+import { ArrowRight, BadgeCheck, Camera, Mail, Check, CreditCard, Eye, EyeOff, Globe2, KeyRound, Loader2, LogOut, MailWarning, ShieldCheck, Trash2, UserRound } from 'lucide-react'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth'
 import { LANGS, useI18n, type Lang, type TKey } from '../i18n'
-import { Avatar, Button, useToast } from '../components/ui'
+import { Avatar, Button, Toggle, useToast } from '../components/ui'
 import { PlanBadge, planStatus } from '../components/Plan'
 import { uploadImage } from './Products'
 import { MONTHS } from './Activity'
@@ -160,6 +160,15 @@ export default function Settings() {
             <div className="mt-5 flex justify-end">
               <Button onClick={saveName} disabled={name.trim() === (user.name || '')} loading={busy === 'name'}>{t('common.save')}</Button>
             </div>
+          </Card>
+          )}
+
+          {active === 'profile' && user.role !== 'manager' && (
+          <Card id="daily" icon={<Mail className="h-4 w-4" />} title={t('set.daily_t')} sub={t('set.daily_d')}>
+            <label className="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-soft px-4 py-3.5">
+              <span className="min-w-0 text-[13.5px] text-ink-2">{user.email}{!user.email_verified && <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-[11.5px] font-semibold text-amber-800">{t('verify.code_t')}</span>}</span>
+              <Toggle checked={user.daily_report !== false} onChange={v => run('daily', async () => { await api.patch('/api/me', { daily_report: v }); await refresh(); toast(t('set.saved')) })} />
+            </label>
           </Card>
           )}
 

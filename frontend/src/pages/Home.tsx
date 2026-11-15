@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { AlarmClock, ArrowDownRight, ArrowRight, ArrowUpRight, Bot, CheckCircle2, Clock, Hand, Inbox as InboxIcon, Instagram, Megaphone, MessageCircle, Phone, Plus, Send, Smartphone, Sparkles, UserCheck, UserPlus, Workflow } from 'lucide-react'
+import { AlarmClock, ArrowDownRight, ArrowRight, ArrowUpRight, Bot, CheckCircle2, Clock, Hand, Inbox as InboxIcon, Instagram, Megaphone, MessageCircle, Phone, Plus, Send, Smartphone, Sparkles, UserCheck, UserPlus, Workflow, Zap } from 'lucide-react'
 import { api, type Contact, type FlowSummary, type SeriesPoint, type Stats } from '../api'
 import { AreaChart, BarChart, HBars, fmtNum } from '../components/charts'
 import { useAuth } from '../auth'
@@ -12,28 +12,51 @@ import { TemplateCard, useCreateFlow, useTemplates } from '../components/NewFlow
 import { TRIGGER_META } from '../editor/meta'
 import OnboardingChecklist from '../components/Onboarding'
 
-export function Onboarding() {
+export function Onboarding({ page }: { page?: boolean }) {
   const { t } = useI18n()
-  return (
-    <div className="relative overflow-hidden rounded-3xl bg-ink p-8 text-white sm:p-10">
-      <div className="pointer-events-none absolute -right-20 -top-20 h-72 w-72 rounded-full bg-brand-600/40 blur-3xl" />
-      <div className="relative max-w-xl">
-        <span className="grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-[#f58529] via-[#dd2a7b] to-[#8134af]"><Instagram className="h-6 w-6" /></span>
-        <h2 className="mt-5 text-[26px] font-extrabold tracking-tight">{t('home.onb.title')}</h2>
-        <p className="mt-2 text-[15px] text-white/70">{t('home.onb.sub')}</p>
-        <ol className="mt-6 space-y-2.5">
-          {(['home.onb.s1', 'home.onb.s2', 'home.onb.s3'] as const).map((k, i) => (
-            <li key={k} className="flex items-center gap-3 text-[14.5px] text-white/90">
-              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-white/10 text-[12px] font-bold">{i + 1}</span>{t(k)}
-            </li>
-          ))}
-        </ol>
-        <a href="/instagram/connect" className="mt-8 inline-flex h-12 items-center gap-2 rounded-xl bg-brand-600 px-6 text-[15px] font-semibold hover:bg-brand-500">
-          {t('home.onb.btn')}<ArrowRight className="h-4 w-4" />
-        </a>
+  const card = (
+    <div className="relative overflow-hidden rounded-[28px] bg-ink text-white">
+      <div className="pointer-events-none absolute -right-24 -top-24 h-80 w-80 rounded-full bg-brand-600/40 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-32 left-1/3 h-72 w-72 rounded-full bg-[#8134af]/25 blur-3xl" />
+      <div className="relative grid items-center gap-8 p-7 sm:p-10 lg:grid-cols-[1.15fr_1fr]">
+        <div>
+          <span className="grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-[#f58529] via-[#dd2a7b] to-[#8134af] shadow-[0_10px_30px_-10px_rgba(221,42,123,.8)]"><Instagram className="h-6 w-6" /></span>
+          <h2 className="mt-5 text-[26px] font-extrabold leading-tight tracking-tight sm:text-[30px]">{t('home.onb.title')}</h2>
+          <p className="mt-2 text-[15px] text-white/65">{t('home.onb.sub')}</p>
+          <ol className="mt-6 space-y-2.5">
+            {(['home.onb.s1', 'home.onb.s2', 'home.onb.s3'] as const).map((k, i) => (
+              <li key={k} className="flex items-center gap-3 text-[14.5px] text-white/90">
+                <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-white/10 text-[12px] font-bold">{i + 1}</span>{t(k)}
+              </li>
+            ))}
+          </ol>
+          <a href="/instagram/connect" className="mt-8 inline-flex h-12 items-center gap-2 rounded-xl bg-brand-600 px-6 text-[15px] font-semibold shadow-[0_12px_28px_-10px_rgba(229,22,31,.8)] transition hover:bg-brand-500">
+            <Instagram className="h-4 w-4" />{t('home.onb.btn')}<ArrowRight className="h-4 w-4" />
+          </a>
+        </div>
+        {/* namuna: Direct yozishma */}
+        <div className="relative mx-auto hidden w-full max-w-[320px] sm:block" aria-hidden>
+          <div className="rounded-3xl bg-white/[.06] p-4 ring-1 ring-white/10 backdrop-blur">
+            <div className="flex items-center gap-2.5 border-b border-white/10 pb-3">
+              <span className="h-8 w-8 rounded-full bg-gradient-to-br from-[#f58529] via-[#dd2a7b] to-[#8134af] p-[2px]"><span className="block h-full w-full rounded-full bg-ink" /></span>
+              <span className="space-y-1.5"><span className="block h-2 w-20 rounded-full bg-white/40" /><span className="block h-1.5 w-12 rounded-full bg-emerald-400/70" /></span>
+            </div>
+            <div className="mt-3 space-y-2">
+              <div className="w-[70%] rounded-2xl rounded-bl-md bg-white/10 px-3 py-2 text-[12.5px]">💬 ?</div>
+              <div className="ml-auto w-[78%] rounded-2xl rounded-br-md bg-gradient-to-br from-[#7b5cff] to-[#b04cf0] px-3 py-2"><span className="block h-1.5 w-full rounded-full bg-white/60" /><span className="mt-1.5 block h-1.5 w-2/3 rounded-full bg-white/60" /></div>
+              <div className="w-[55%] rounded-2xl rounded-bl-md bg-white/10 px-3 py-2"><span className="block h-1.5 w-full rounded-full bg-white/40" /></div>
+              <div className="ml-auto flex w-fit gap-1 rounded-2xl rounded-br-md bg-violet-500/30 px-3 py-2.5">{[0, 1, 2].map(i => <span key={i} className="typing-dot h-1.5 w-1.5 rounded-full bg-violet-200" style={{ animationDelay: `${i * .15}s` }} />)}</div>
+            </div>
+          </div>
+          <div className="absolute -bottom-4 -left-6 flex items-center gap-2 rounded-2xl bg-white px-3 py-2 text-[12px] font-bold text-ink shadow-pop" style={{ animation: 'float 5s ease-in-out infinite' }}>
+            <span className="grid h-6 w-6 place-items-center rounded-lg bg-emerald-50 text-emerald-600"><Zap className="h-3.5 w-3.5" /></span>2s · 24/7
+          </div>
+        </div>
       </div>
     </div>
   )
+  // to'liq ekranli sahifalarda (Chatlar, CRM) — markazda, chetlardan joy qoldirib
+  return page ? <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-8 sm:py-10">{card}</div> : card
 }
 
 /** Menejer (va egasi) uchun: menga biriktirilgan mijozlar va yaqin eslatmalar. */

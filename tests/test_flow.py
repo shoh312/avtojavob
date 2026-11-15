@@ -523,10 +523,31 @@ def test_password_reset_and_verify(client, monkeypatch):
     assert client.post("/api/auth/reset", json={"token": token, "password": "another123"}, headers=H).json()["error"] == "token_invalid"
     _login(client, "a@b.tj", "newpass123")
 
-    client.post("/api/auth/verify/send", headers=H)
-    vtoken = mails[-1][1].split("token=")[1].strip()
-    r = client.get(f"/verify-email?token={vtoken}", follow_redirects=False)
-    assert r.headers["location"] == "/app?verified=1" and client.get("/api/me").json()["user"]["email_verified"]
+    # parolni tiklash emailni ham tasdiqlaydi
+    assert client.get("/api/me").json()["user"]["email_verified"]
+    assert client.post("/api/auth/verify/send", headers=H).json()["verified"] is True
+
+    # OTP: yangi foydalanuvchiga 6 xonali kod yuboriladi
+    import re as _re
+    from fastapi.testclient import TestClient
+    from app.main import app
+    with TestClient(app) as c3:
+        c3.post("/api/auth/register", json={"email": "otp@x.tj", "password": "12345678", "lang": "ru"}, headers=H)
+        to, text = mails[-1]
+        code = _re.search(r"(\d{6})", text).group(1)  # matnda kod alohida qatorda
+        assert to == "otp@x.tj" and not c3.get("/api/me").json()["user"]["email_verified"]
+        assert c3.post("/api/auth/verify/send", headers=H).json()["wait"] > 0  # darhol qayta yuborilmaydi
+        wrong = "000000" if code != "000000" else "111111"
+        assert c3.post("/api/auth/verify", json={"code": wrong}, headers=H).json()["error"] == "code_invalid"
+        assert c3.post("/api/auth/verify", json={"code": code}, headers=H).json()["user"]["email_verified"] is True
+        # 5 ta noto'g'ri urinishdan keyin kod bloklanadi
+        from app import reports
+        from app.models import User as _U
+        u = _U(id=999, email="z@z.tj")
+        c = reports.new_code(u)
+        for _ in range(reports.CODE_MAX_TRIES):
+            assert reports.check_code(u, wrong if wrong != c else "222222") == "code_invalid"
+        assert reports.check_code(u, c) == "code_too_many"
     assert client.get("/health").json() == {"ok": True}
 
 
@@ -1366,3 +1387,34 @@ def test_onboarding_wizard(client):
         # Instagram ulash: sehrgardan kelsa — qaytish manzili eslab qolinadi
         r = c2.get("/instagram/connect?next=welcome", follow_redirects=False)
         assert r.status_code in (302, 303)
+
+
+
+def test_daily_report(client, monkeypatch):
+    from app import reports, services
+    from app.db import SessionLocal
+    from app.models import IGAccount, User
+    sent = []
+    monkeypatch.setattr(services, "send_email", lambda cfg, to, subj, text, html=None: sent.append((to, subj, html)))
+    with SessionLocal() as db:
+        acc = db.scalars(__import__("sqlalchemy").select(IGAccount)).first()
+        uid = acc.user_id
+        u = db.get(User, uid)
+        u.email_verified, u.daily_report, u.report_sent_at = True, True, None
+        db.commit()
+        data = reports.build_report(db, u)
+        assert set(data["total"]) == {"in", "auto", "ai", "contacts", "leads"}
+    assert reports.run_daily(force_user_id=uid) == 1
+    to, subj, html = sent[-1]
+    assert "📊" in subj and "ChatFlow" in html and "/email/unsubscribe?token=" in html
+    token = html.split("/email/unsubscribe?token=")[1].split('"')[0]
+    # vaqt: soat 4 UTC dan oldin yuborilmaydi, bugun yuborilgan bo'lsa qayta yo'q
+    from datetime import datetime
+    assert not reports.due(User(report_sent_at=None), datetime(2026, 1, 2, 3, 0))
+    assert reports.due(User(report_sent_at=datetime(2026, 1, 1, 9)), datetime(2026, 1, 2, 5, 0))
+    assert not reports.due(User(report_sent_at=datetime(2026, 1, 2, 4, 30)), datetime(2026, 1, 2, 9, 0))
+    r = client.get(f"/email/unsubscribe?token={token}")
+    assert r.status_code == 200
+    with SessionLocal() as db:
+        assert db.get(User, uid).daily_report is False
+    assert "invalid" in client.get("/email/unsubscribe?token=bad").text

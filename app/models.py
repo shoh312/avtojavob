@@ -25,6 +25,14 @@ class User(Base):
     avatar: Mapped[str] = mapped_column(String(120), default="")  # yuklangan profil rasmi (uploads/ ichida)
     # ro'yxatdan o'tgach sehrgar: "" — eski foydalanuvchi (ko'rsatilmaydi), {"pending": true, ...} — yangi
     onboarding_json: Mapped[str] = mapped_column(Text, default="")
+    # email tasdiqlash kodi (6 raqam, HMAC xeshi), muddati va urinishlar
+    verify_code: Mapped[str] = mapped_column(String(128), default="")
+    verify_exp: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    verify_tries: Mapped[int] = mapped_column(Integer, default=0)
+    verify_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # har kuni emailga hisobot
+    daily_report: Mapped[bool] = mapped_column(Boolean, default=True)
+    report_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     lang: Mapped[str] = mapped_column(String(5), default="ru")
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
