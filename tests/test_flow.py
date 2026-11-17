@@ -1450,3 +1450,87 @@ def test_admin_delete_user(client):
         assert db.get(User, uid) is None and db.get(User, mid) is None and db.get(IGAccount, aid) is None
         assert db.scalar(__import__("sqlalchemy").select(Contact).where(Contact.igsid == "del-c1")) is None
     assert client.get(f"/api/admin/users/{uid}").status_code == 404
+
+
+def test_mcp_server(client):
+    from datetime import timedelta
+    from app.db import SessionLocal
+    from app.models import Contact, IGAccount, User, utcnow
+    from app.security import encrypt, hash_password
+    with SessionLocal() as db:
+        u = User(email="mcp@x.tj", password_hash=hash_password("12345678"), plan="business",
+                 plan_expires_at=utcnow() + timedelta(days=30), email_verified=True)
+        db.add(u)
+        db.flush()
+        acc = IGAccount(user_id=u.id, ig_user_id="mcp-1", username="mcp_shop", access_token_enc=encrypt("t"))
+        db.add(acc)
+        db.flush()
+        c = Contact(account_id=acc.id, igsid="mcp-c1", username="madina", last_inbound_at=utcnow(),
+                    last_message_at=utcnow(), last_message_preview="цена?")
+        c.fields = {"phone": "+992900000000"}
+        db.add(c)
+        db.commit()
+        cid = c.id
+    _login(client, "mcp@x.tj")
+    assert client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"}).status_code == 401
+    ro = client.post("/api/tokens", json={"name": "Claude", "scope": "read"}, headers=H).json()
+    rw = client.post("/api/tokens", json={"name": "Claude RW", "scope": "write"}, headers=H).json()
+    assert ro["token"].startswith("cf_") and ro["prefix"] == ro["token"][:10]
+    listed = client.get("/api/tokens").json()
+    assert len(listed["items"]) == 2 and "token" not in listed["items"][0] and listed["mcp_url"].endswith("/mcp")
+
+    def rpc(token, method, params=None, rid=1):
+        r = client.post("/mcp", json={"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}},
+                        headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    def call(token, name, **args):
+        res = rpc(token, "tools/call", {"name": name, "arguments": args})["result"]
+        return res["isError"], (json.loads(res["content"][0]["text"]) if not res["isError"] else res["content"][0]["text"])
+
+    init = rpc(ro["token"], "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                            "clientInfo": {"name": "test", "version": "1"}})["result"]
+    assert init["protocolVersion"] == "2025-06-18" and init["serverInfo"]["name"] == "ChatFlow"
+    note = client.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                       headers={"Authorization": f"Bearer {ro['token']}"})
+    assert note.status_code == 202
+    ro_tools = {t["name"] for t in rpc(ro["token"], "tools/list")["result"]["tools"]}
+    rw_tools = {t["name"] for t in rpc(rw["token"], "tools/list")["result"]["tools"]}
+    assert "send_message" not in ro_tools and {"send_message", "create_flow", "list_contacts"} <= rw_tools
+
+    bad, data = call(ro["token"], "list_accounts")
+    assert not bad and data["accounts"][0]["username"] == "mcp_shop"
+    bad, data = call(ro["token"], "get_overview")
+    assert not bad and data["account"] == "@mcp_shop" and "kpi" in data
+    bad, data = call(ro["token"], "list_contacts", list="leads")
+    assert not bad and data["contacts"][0]["phone"] == "+992900000000"
+    bad, data = call(ro["token"], "get_daily_stats", days=7)
+    assert not bad and len(data["sent"]) == 7
+    bad, msg = call(ro["token"], "send_message", contact_id=cid, text="Salom")
+    assert bad and "read-only" in msg
+    bad, msg = call(ro["token"], "get_conversation", contact_id=999999)
+    assert bad and "Not found" in msg
+    bad, msg = call(ro["token"], "get_conversation", contact_id=cid, nope=1)
+    assert bad and "Unknown arguments" in msg
+
+    stages = call(rw["token"], "get_crm_stages")[1]["stages"]
+    bad, data = call(rw["token"], "update_contact", contact_id=cid, stage=stages[1]["name"], deal_value=320, add_tags=["vip"])
+    assert not bad and data["contact"]["stage"] == stages[1]["id"] and data["contact"]["tags"] == ["vip"]
+    bad, msg = call(rw["token"], "update_contact", contact_id=cid, stage="yo'q-bosqich")
+    assert bad and "Unknown CRM stage" in msg
+    assert not call(rw["token"], "add_note", contact_id=cid, text="Qo'ng'iroq qilish", remind_at="2030-01-01T09:00:00Z")[0]
+    assert call(rw["token"], "list_tasks")[1]["items"][0]["text"] == "Qo'ng'iroq qilish"
+    calls.clear()
+    bad, data = call(rw["token"], "send_message", contact_id=cid, text="Assalomu alaykum!")
+    assert not bad and calls == [("dm", "mcp-c1", {"text": "Assalomu alaykum!"})]
+    conv = call(rw["token"], "get_conversation", contact_id=cid)[1]
+    assert conv["messages"][-1]["text"] == "Assalomu alaykum!" and conv["bot_paused"]
+
+    # boshqa ish maydonining kontakti ko'rinmaydi; kalit o'chirilgach ishlamaydi
+    bad, msg = call(rw["token"], "get_conversation", contact_id=S["contact"])
+    assert bad and "Not found" in msg
+    client.delete(f"/api/tokens/{ro['id']}", headers=H)
+    assert client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                       headers={"Authorization": f"Bearer {ro['token']}"}).status_code == 401
+    assert client.get("/mcp").status_code == 405

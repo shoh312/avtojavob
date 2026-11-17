@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowRight, BadgeCheck, Camera, Mail, Check, CreditCard, Eye, EyeOff, Globe2, KeyRound, Loader2, LogOut, MailWarning, ShieldCheck, Trash2, UserRound } from 'lucide-react'
+import { ArrowRight, BadgeCheck, Bot, Camera, Mail, Check, CreditCard, Eye, EyeOff, Globe2, KeyRound, Loader2, LogOut, MailWarning, ShieldCheck, Trash2, UserRound } from 'lucide-react'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth'
 import { LANGS, useI18n, type Lang, type TKey } from '../i18n'
@@ -8,12 +8,14 @@ import { Avatar, Button, Toggle, useToast } from '../components/ui'
 import { PlanBadge, planStatus } from '../components/Plan'
 import { uploadImage } from './Products'
 import { MONTHS } from './Activity'
+import ApiKeys from '../components/ApiKeys'
 
 const SECTIONS = [
   { id: 'profile', icon: UserRound, label: 'set.profile' },
   { id: 'language', icon: Globe2, label: 'set.language' },
   { id: 'security', icon: ShieldCheck, label: 'set2.security' },
   { id: 'plan', icon: CreditCard, label: 'set2.plan' },
+  { id: 'api', icon: Bot, label: 'set.api' },
   { id: 'account', icon: LogOut, label: 'set2.account' },
 ] as const
 
@@ -62,7 +64,7 @@ export default function Settings() {
   const [pw, setPw] = useState({ password: '', new_password: '' })
   const [busy, setBusy] = useState('')
   const [params, setParams] = useSearchParams()
-  const sections = SECTIONS.filter(s => !(s.id === 'plan' && user?.role === 'manager'))
+  const sections = SECTIONS.filter(s => !((s.id === 'plan' || s.id === 'api') && user?.role === 'manager'))
   const active = sections.some(s => s.id === params.get('tab')) ? params.get('tab')! : 'profile'
   const open = (id: string) => setParams(id === 'profile' ? {} : { tab: id }, { replace: true })
   const file = useRef<HTMLInputElement>(null)
@@ -241,6 +243,8 @@ export default function Settings() {
               </div>
             </Card>
           )}
+
+          {user.role !== 'manager' && active === 'api' && <ApiKeys />}
 
           {active === 'account' && (
           <Card id="account" icon={<LogOut className="h-4 w-4" />} title={t('set2.account')} sub={t('set2.account_d')}>

@@ -404,3 +404,18 @@ class TeamTg(Base):
     account_id: Mapped[int] = mapped_column(ForeignKey("ig_accounts.id", ondelete="CASCADE"), index=True)
     chat_id: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ApiToken(Base):
+    """MCP / API uchun shaxsiy kalit (ish maydoni egasi nomidan). Kalitning o'zi saqlanmaydi — faqat SHA-256 xeshi."""
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(80), default="")
+    prefix: Mapped[str] = mapped_column(String(16), default="")       # ko'rsatish uchun: cf_AbC123…
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    scope: Mapped[str] = mapped_column(String(10), default="read")    # read | write
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

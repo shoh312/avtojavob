@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import instagram as ig
-from . import aimanager, catalog, crm, reports, services, tgbot
+from . import aimanager, catalog, crm, mcp, reports, services, tgbot
 from .config import settings
 from .db import get_db, init_db
 from .engine import contact_card as engine_contact_card
@@ -37,7 +37,7 @@ from .engine import (broadcast_audience, log_event, process_payload, record_mess
                      resubscribe_all, run_broadcast, run_due_jobs, run_due_reminders)
 from .flows import (blank_graph, build_template, generate_system, list_templates, normalize_generated, trigger_of,
                     validate_graph)
-from .models import (LANGS, SEND_KINDS, Broadcast, Contact, EventLog, Flow, IGAccount, Message, NodeStat, Note,
+from .models import (LANGS, SEND_KINDS, ApiToken, Broadcast, Contact, EventLog, Flow, IGAccount, Message, NodeStat, Note,
                      PlanGrant, Product, TeamTg, User, utcnow)
 from .plans import (PLANS, TRIAL_DAYS, accounts_limit, get_setting, is_active, plan_json, plans_public,
                     set_setting)
@@ -1148,6 +1148,7 @@ def admin_delete_user(user_id: int, body: dict = Body(...), admin: User = Depend
         files += [a for (a,) in db.execute(select(Contact.avatar).where(Contact.account_id.in_(acc_ids), Contact.avatar != ""))]
     db.execute(PlanGrant.__table__.delete().where(PlanGrant.user_id.in_(ids)))
     db.execute(TeamTg.__table__.delete().where(TeamTg.user_id.in_(ids)))
+    db.execute(ApiToken.__table__.delete().where(ApiToken.user_id.in_(ids)))
     for m in members:
         db.delete(m)
     db.delete(u)  # Instagram akkauntlari va ularning ma'lumotlari kaskad bilan
@@ -2422,6 +2423,304 @@ def admin_test_email(body: dict = Body(...), admin: User = Depends(admin_user), 
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- API kalitlar va MCP server (Claude, ChatGPT, Cursor)
+
+MAX_TOKENS = 10
+
+
+def _token_json(t: ApiToken) -> dict:
+    return {"id": t.id, "name": t.name, "prefix": t.prefix, "scope": t.scope,
+            "created_at": iso(t.created_at), "last_used_at": iso(t.last_used_at)}
+
+
+@app.get("/api/tokens")
+def tokens_list(user: User = Depends(owner_user), db: Session = Depends(get_db)):
+    rows = db.scalars(select(ApiToken).where(ApiToken.user_id == user.id).order_by(ApiToken.id.desc())).all()
+    return {"items": [_token_json(t) for t in rows], "mcp_url": f"{settings.APP_URL.rstrip('/')}/mcp"}
+
+
+@app.post("/api/tokens")
+def tokens_create(body: dict = Body(...), user: User = Depends(owner_user), db: Session = Depends(get_db)):
+    if (db.scalar(select(func.count(ApiToken.id)).where(ApiToken.user_id == user.id)) or 0) >= MAX_TOKENS:
+        err("too_many_tokens")
+    raw, prefix, digest = mcp.new_token()
+    t = ApiToken(user_id=user.id, name=(str(body.get("name") or "").strip() or "MCP")[:80], prefix=prefix,
+                 token_hash=digest, scope="write" if body.get("scope") == "write" else "read")
+    db.add(t)
+    db.commit()
+    return {**_token_json(t), "token": raw}  # kalit faqat shu javobda ko'rinadi
+
+
+@app.delete("/api/tokens/{token_id}")
+def tokens_delete(token_id: int, user: User = Depends(owner_user), db: Session = Depends(get_db)):
+    t = db.get(ApiToken, token_id)
+    if not t or t.user_id != user.id:
+        err("not_found", 404)
+    db.delete(t)
+    db.commit()
+    return {"ok": True}
+
+
+def _mcp_auth(db: Session, header: str) -> tuple[ApiToken | None, User | None]:
+    raw = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    if not raw.startswith(mcp.TOKEN_PREFIX):
+        return None, None
+    t = db.scalar(select(ApiToken).where(ApiToken.token_hash == mcp.hash_token(raw)))
+    u = db.get(User, t.user_id) if t else None
+    if not t or not u or u.is_blocked or u.is_manager:
+        return None, None
+    now = utcnow()
+    if not t.last_used_at or now - t.last_used_at > timedelta(minutes=1):
+        t.last_used_at = now
+        db.commit()
+    return t, u
+
+
+MCP_ERRORS = {
+    "not_found": "Not found (or it belongs to another workspace).", "window_closed":
+    "Instagram 24-hour window is closed: the customer has not written in the last 24 hours, so a message cannot be sent.",
+    "plan_inactive": "The ChatFlow plan has expired — renew it in ChatFlow to use automation.",
+    "bad_stage": "Unknown CRM stage. Call get_crm_stages for valid ids.", "empty": "Text is empty.",
+    "message_text": "Message must be 1–1000 characters.", "ai_unavailable": "AI is not configured on this ChatFlow server.",
+    "bad_date": "Bad date: use ISO-8601, e.g. 2026-11-20T09:00:00Z.",
+}
+
+
+def _mcp_process(header: str, body) -> tuple[int, dict | list | None]:
+    from .db import SessionLocal
+    with SessionLocal() as db:
+        token, user = _mcp_auth(db, header)
+        if not token:
+            return 401, {"error": "invalid_token"}
+        if not mcp.rate_ok(token.id):
+            return 429, {"error": "rate_limited"}
+
+        def call(t: mcp.Tool, args: dict):
+            if not is_active(user.workspace):
+                raise mcp.ToolError(MCP_ERRORS["plan_inactive"])
+            try:
+                return t.fn(db=db, user=user, **args)
+            except HTTPException as e:
+                code = str(e.detail)
+                raise mcp.ToolError(MCP_ERRORS.get(code) or (code[3:] if code.startswith("ig:") else code))
+            except (TypeError, ValueError) as e:
+                raise mcp.ToolError(f"Bad arguments: {e}")
+
+        if isinstance(body, list):
+            out = [r for r in (mcp.handle(m, token.scope, call) for m in body) if r is not None]
+            return (200, out) if out else (202, None)
+        res = mcp.handle(body, token.scope, call)
+        return (200, res) if res is not None else (202, None)
+
+
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
+async def mcp_endpoint(request: Request):
+    if request.method != "POST":  # holatsiz server: SSE oqim va sessiyalar yo'q
+        return PlainTextResponse("Method Not Allowed", status_code=405, headers={"Allow": "POST"})
+    try:
+        body = json.loads(await request.body() or b"null")
+    except ValueError:
+        return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}})
+    status, data = await asyncio.to_thread(_mcp_process, request.headers.get("authorization", ""), body)
+    if status == 401:
+        return JSONResponse({"error": "invalid_token", "error_description": "Create an API key in ChatFlow → Settings → API & MCP"},
+                            status_code=401, headers={"WWW-Authenticate": 'Bearer realm="ChatFlow"'})
+    if status == 202:
+        return PlainTextResponse("", status_code=202)
+    return JSONResponse(data, status_code=status)
+
+
+# ---------- MCP asboblari (mavjud endpoint funksiyalari ustida yupqa qatlam)
+
+def _mcp_acc(db: Session, user: User, account_id) -> IGAccount:
+    if account_id:
+        return owned_account(db, user, int(account_id))
+    accs = user.workspace.accounts
+    if not accs:
+        raise mcp.ToolError("No Instagram account is connected to ChatFlow yet.")
+    return accs[0]
+
+
+def _mcp_contact(c: Contact, stages: dict[str, str]) -> dict:
+    f = c.fields
+    return {"id": c.id, "username": c.username and f"@{c.username}", "name": c.name, "phone": f.get("phone", ""),
+            "email": f.get("email", ""), "stage": c.stage, "stage_name": stages.get(c.stage or "", ""),
+            "deal_value": c.deal_value or 0, "tags": c.tags, "last_message": c.last_message_preview,
+            "last_message_at": iso(c.last_message_at), "unread": c.unread or 0, "can_message": c.can_message(),
+            "assigned_to": (c.assignee.name or c.assignee.email) if c.assignee else None,
+            "created_at": iso(c.created_at)}
+
+
+def _stage_names(acc: IGAccount) -> dict[str, str]:
+    return {s["id"]: s.get("name", s["id"]) for s in crm.get_stages(acc)}
+
+
+ACC_PROP = {"account_id": {"type": "integer", "description": "Instagram account id from list_accounts (optional)."}}
+
+
+@mcp.tool("list_accounts", "Instagram accounts", "List Instagram accounts connected to this ChatFlow workspace.")
+def mcp_list_accounts(db: Session, user: User):
+    return {"accounts": [{**account_json(a), "ai_seller": a.ai_enabled, "telegram": bool(a.tg_chat_id)}
+                         for a in user.workspace.accounts],
+            "plan": plan_json(user.workspace)}
+
+
+@mcp.tool("get_overview", "Overview & KPIs",
+          "Key numbers for an account: messages in/out (24h vs previous 24h), new contacts and leads (7d vs previous 7d), "
+          "what needs attention (unread, overdue tasks, closing 24h windows), CRM summary and reply sources.",
+          ACC_PROP)
+def mcp_overview(db: Session, user: User, account_id=None):
+    acc = _mcp_acc(db, user, account_id)
+    home = home_overview(acc.id, user, db)
+    home.pop("recent", None)
+    s = crm_summary(acc.id, user, db)
+    return {"account": f"@{acc.username}", **home, "totals": stats(acc.id, user, db),
+            "crm": {k: s[k] for k in ("clients", "leads", "attention", "forgotten", "deals", "tasks", "overdue")}}
+
+
+@mcp.tool("get_daily_stats", "Daily statistics",
+          "Day-by-day series for the last N days (7–90): automated messages sent, new contacts, button clicks, plus top flows.",
+          {**ACC_PROP, "days": {"type": "integer", "minimum": 7, "maximum": 90, "default": 30}})
+def mcp_daily(db: Session, user: User, account_id=None, days: int = 30):
+    acc = _mcp_acc(db, user, account_id)
+    return stats_series(acc.id, int(days), user, db)
+
+
+@mcp.tool("list_contacts", "Find contacts & leads",
+          "Search customers (CRM). Filters: query (username/name/phone), list=leads|attention|forgotten, stage id "
+          "(or 'none'), period=today|week|month|all. 30 per page.",
+          {**ACC_PROP, "query": {"type": "string"}, "list": {"type": "string", "enum": ["leads", "attention", "forgotten"]},
+           "stage": {"type": "string"}, "period": {"type": "string", "enum": ["today", "week", "month", "all"]},
+           "page": {"type": "integer", "minimum": 1, "default": 1}})
+def mcp_contacts(db: Session, user: User, account_id=None, query: str = "", list: str = "", stage: str = "",  # noqa: A002
+                 period: str = "all", page: int = 1):
+    acc = _mcp_acc(db, user, account_id)
+    r = crm_clients(acc.id, q=query, period=period, list=list, stage=stage, assigned="", tag="", flow=0,
+                    page=int(page), user=user, db=db)
+    names = _stage_names(acc)
+    rows = db.scalars(select(Contact).where(Contact.id.in_([i["id"] for i in r["items"]]))).all()
+    by_id = {c.id: c for c in rows}
+    return {"total": r["total"], "page": int(page), "per_page": r["per_page"], "funnel": r["funnel"],
+            "contacts": [_mcp_contact(by_id[i["id"]], names) for i in r["items"] if i["id"] in by_id]}
+
+
+@mcp.tool("get_conversation", "Read a conversation",
+          "Latest Direct messages with one contact (oldest first), plus the contact card. Does not mark them as read.",
+          {"contact_id": {"type": "integer"}, "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}},
+          ["contact_id"])
+def mcp_conversation(db: Session, user: User, contact_id: int, limit: int = 50):
+    c = _owned_contact(db, user, int(contact_id))
+    msgs = db.scalars(select(Message).where(Message.contact_id == c.id)
+                      .order_by(Message.created_at.desc(), Message.id.desc()).limit(max(1, min(int(limit), 200)))).all()
+    return {"contact": _mcp_contact(c, _stage_names(c.account)), "window_left_h": _conv_json(c)["window_left_h"],
+            "bot_paused": c.bot_paused(),
+            "messages": [{"from": "customer" if m.direction == "in" else m.source, "text": m.text, "at": iso(m.created_at)}
+                         for m in reversed(msgs)]}
+
+
+@mcp.tool("get_crm_stages", "CRM stages", "CRM pipeline stages (id, name, type open/won/lost) with deal counts and sums.",
+          ACC_PROP)
+def mcp_stages(db: Session, user: User, account_id=None):
+    acc = _mcp_acc(db, user, account_id)
+    b = crm_board(acc.id, q="", assigned="", user=user, db=db)
+    return {"stages": [{**s, **b["totals"].get(s["id"], {})} for s in b["stages"]]}
+
+
+@mcp.tool("list_tasks", "CRM tasks & reminders", "Open (or done) CRM reminders, soonest first.",
+          {**ACC_PROP, "done": {"type": "boolean", "default": False}})
+def mcp_tasks(db: Session, user: User, account_id=None, done: bool = False):
+    acc = _mcp_acc(db, user, account_id)
+    return crm_tasks(acc.id, 1 if done else 0, user, db)
+
+
+@mcp.tool("list_flows", "Automation flows",
+          "Automation flows (comment / Direct / story triggers) with trigger keywords, active state, runs and conversion.",
+          ACC_PROP)
+def mcp_flows(db: Session, user: User, account_id=None):
+    acc = _mcp_acc(db, user, account_id)
+    keep = ("id", "name", "active", "runs", "trigger", "users", "converted", "conversion", "last_run", "updated_at")
+    return {"flows": [{k: f[k] for k in keep} for f in flows_list(acc.id, user, db)["items"]]}
+
+
+@mcp.tool("create_flow", "Create a flow with AI",
+          "Generate a new automation flow from a plain-language description (e.g. 'when someone comments SALE, reply "
+          "publicly and DM them a 10% promo code'). It is created INACTIVE — review it, then use set_flow_active.",
+          {**ACC_PROP, "description": {"type": "string", "minLength": 5, "maxLength": 2000}}, ["description"], write=True)
+def mcp_create_flow(db: Session, user: User, description: str, account_id=None):
+    acc = _mcp_acc(db, user, account_id)
+    r = flow_generate({"account_id": acc.id, "prompt": description}, user, db)
+    if isinstance(r, JSONResponse):
+        raise mcp.ToolError("AI could not build the flow — try describing it differently.")
+    return {"flow": {k: r[k] for k in ("id", "name", "active", "trigger", "nodes")}, "problems": r["errors"],
+            "editor_url": f"{settings.APP_URL.rstrip('/')}/app/flows/{r['id']}"}
+
+
+@mcp.tool("set_flow_active", "Turn a flow on/off", "Activate or deactivate a flow. A flow with errors cannot be activated.",
+          {"flow_id": {"type": "integer"}, "active": {"type": "boolean"}}, ["flow_id", "active"], write=True)
+def mcp_flow_active(db: Session, user: User, flow_id: int, active: bool):
+    r = flow_save(int(flow_id), {"active": bool(active)}, user, db)
+    if active and not r["active"]:
+        raise mcp.ToolError(f"The flow has problems and was not activated: {r['errors']}")
+    return {"id": r["id"], "name": r["name"], "active": r["active"]}
+
+
+@mcp.tool("update_contact", "Update a contact",
+          "Move a contact to a CRM stage (stage id or name; 'none' removes it from the pipeline), set deal value, "
+          "rename, add or remove tags.",
+          {"contact_id": {"type": "integer"}, "stage": {"type": "string"}, "deal_value": {"type": "integer", "minimum": 0},
+           "name": {"type": "string"}, "add_tags": {"type": "array", "items": {"type": "string"}},
+           "remove_tags": {"type": "array", "items": {"type": "string"}}}, ["contact_id"], write=True)
+def mcp_update_contact(db: Session, user: User, contact_id: int, stage: str | None = None, deal_value: int | None = None,
+                       name: str | None = None, add_tags: list | None = None, remove_tags: list | None = None):
+    c = _owned_contact(db, user, int(contact_id))
+    body: dict = {}
+    if stage is not None:
+        if stage.strip().lower() in ("", "none"):
+            body["stage"] = None
+        else:
+            want = stage.strip().lower()
+            match = next((s for s in crm.get_stages(c.account)
+                          if s["id"].lower() == want or str(s.get("name", "")).strip().lower() == want), None)
+            if not match:
+                raise mcp.ToolError(MCP_ERRORS["bad_stage"])
+            body["stage"] = match["id"]
+    if deal_value is not None:
+        body["deal_value"] = deal_value
+    if name is not None:
+        body["name"] = name
+    if add_tags or remove_tags:
+        tags = [t for t in c.tags if t not in set(remove_tags or [])]
+        tags += [str(t).strip()[:40] for t in add_tags or [] if str(t).strip() and str(t).strip() not in tags]
+        body["tags"] = tags
+    if not body:
+        raise mcp.ToolError("Nothing to change.")
+    contact_update(c.id, body, user, db)
+    db.refresh(c)
+    return {"contact": _mcp_contact(c, _stage_names(c.account))}
+
+
+@mcp.tool("add_note", "Add a CRM note / reminder",
+          "Add a note to a contact. With remind_at (ISO-8601 UTC) it becomes a task; the reminder arrives in Telegram.",
+          {"contact_id": {"type": "integer"}, "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+           "remind_at": {"type": "string", "description": "ISO-8601, e.g. 2026-11-20T09:00:00Z"}},
+          ["contact_id", "text"], write=True)
+def mcp_add_note(db: Session, user: User, contact_id: int, text: str, remind_at: str = ""):
+    body = {"text": text, **({"remind_at": remind_at} if remind_at else {})}
+    contact_note(int(contact_id), body, user, db)
+    return {"ok": True, "contact_id": int(contact_id), "remind_at": remind_at or None}
+
+
+@mcp.tool("send_message", "Send a Direct message",
+          "Send a Direct message to one contact on Instagram as a human agent (the bot pauses for 60 min). Only possible "
+          "within 24 hours of the customer's last message. Always confirm the exact text with the user first.",
+          {"contact_id": {"type": "integer"}, "text": {"type": "string", "minLength": 1, "maxLength": 1000}},
+          ["contact_id", "text"], write=True, destructive=True)
+def mcp_send(db: Session, user: User, contact_id: int, text: str):
+    inbox_send(int(contact_id), {"text": text, "pause": True}, user, db)
+    c = _owned_contact(db, user, int(contact_id))
+    return {"ok": True, "to": c.username and f"@{c.username}" or c.name, "text": text}
+
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
     db.execute(select(1))
@@ -2439,7 +2738,7 @@ if (WEB_DIR / "assets").is_dir():
 
 @app.get("/{path:path}", include_in_schema=False)
 def spa(path: str):
-    if path.startswith(("api/", "webhook", "auth/google", "tg/", "uploads/")):
+    if path.startswith(("api/", "webhook", "auth/google", "tg/", "uploads/", "mcp")):
         return JSONResponse({"error": "not_found"}, status_code=404)
     static = (WEB_DIR / path).resolve()
     if path and static.is_file() and WEB_DIR.resolve() in static.parents:
