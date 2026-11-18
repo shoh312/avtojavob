@@ -42,6 +42,26 @@ class IGError(Exception):
     pass
 
 
+class IGTokenError(IGError):
+    """Token bekor qilingan (parol o'zgardi, sessiya tugadi...) — akkauntni qayta ulash kerak."""
+
+
+# Instagram "token yaroqsiz" deb javob bergan tokenlar; engine.check_dead_tokens ularni akkauntga bog'laydi
+_dead: set[str] = set()
+_dead_lock = threading.Lock()
+
+
+def pop_dead_tokens() -> set[str]:
+    with _dead_lock:
+        out = set(_dead)
+        _dead.clear()
+    return out
+
+
+def _is_token_error(err: dict, msg: str) -> bool:
+    return err.get("code") == 190 or "validating access token" in msg.lower() or "session has been invalidated" in msg.lower()
+
+
 def _graph(path: str) -> str:
     return f"https://graph.instagram.com/{settings.GRAPH_VERSION}/{path.lstrip('/')}"
 
@@ -55,6 +75,15 @@ def _json(resp: httpx.Response) -> dict:
         err = data.get("error") if isinstance(data, dict) else None
         if isinstance(err, dict):
             msg = err.get("message") or str(err)
+            if _is_token_error(err, msg):
+                try:
+                    token = resp.request.url.params.get("access_token")
+                except RuntimeError:  # so'rovsiz yasalgan javob (testlar)
+                    token = None
+                if token:
+                    with _dead_lock:
+                        _dead.add(token)
+                raise IGTokenError(msg)
         else:
             msg = data.get("error_message") or resp.text[:300]
         raise IGError(msg)

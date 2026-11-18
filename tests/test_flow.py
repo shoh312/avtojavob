@@ -1344,6 +1344,48 @@ def test_product_image_from_post(client, monkeypatch):
     assert client.post("/api/products/from-post", json={"account_id": acc, "media_id": "1789"}, headers=H).json()["error"] == "post_image"
 
 
+def test_ig_disconnect_alert_and_mobile_oauth(client, monkeypatch):
+    import httpx
+    from urllib.parse import parse_qs, urlparse
+    from app import health, services
+    acc = S["acc"]
+    mails = []
+    monkeypatch.setattr(services, "smtp_config", lambda db: {"host": "x", "port": 465, "user": "", "password": "", "from": "a@b"})
+    monkeypatch.setattr(services, "send_email", lambda cfg, to, subj, text, html=None: mails.append((to, subj, html)))
+    ig.pop_dead_tokens()
+    # Graph 190 xatosi -> token "o'lik" ro'yxatiga tushadi
+    resp = httpx.Response(400, json={"error": {"code": 190, "message": "Error validating access token: session invalidated"}},
+                          request=httpx.Request("GET", "https://graph.instagram.com/me?access_token=tok"))
+    with pytest.raises(ig.IGTokenError):
+        ig._json(resp)
+    assert health.check_dead_tokens() == 1
+    assert mails and mails[0][0] == "a@b.tj" and "Instagram @" in mails[0][1] and "/app/accounts?reconnect=1" in mails[0][2]
+    with pytest.raises(ig.IGTokenError):
+        ig._json(resp)
+    assert health.check_dead_tokens() == 0 and len(mails) == 1  # faqat bir marta
+    a = next(x for x in client.get("/api/me").json()["accounts"] if x["id"] == acc)
+    assert a["disconnected"] is True
+
+    # Telefonda: callback boshqa brauzerda (sessiyasiz) ochiladi — imzolangan state bilan baribir ulanadi
+    loc = client.get("/instagram/connect", follow_redirects=False).headers["location"]
+    state = parse_qs(urlparse(loc).query)["state"][0]
+    monkeypatch.setattr(ig, "exchange_code", lambda code: {"access_token": "short", "user_id": IG_ID})
+    monkeypatch.setattr(ig, "get_long_lived_token", lambda t: ("tok", 5184000))
+    monkeypatch.setattr(ig, "get_me", lambda t: {"user_id": IG_ID, "username": "dokon", "name": "Dokon"})
+    other = TestClient(app)  # cookie'siz "boshqa brauzer"
+    r = other.get(f"/instagram/callback?code=abc&state={state}", follow_redirects=False)
+    assert r.status_code == 200 and "@dokon" in r.text
+    assert other.get(f"/instagram/callback?code=abc&state={state}", follow_redirects=False).status_code == 303  # bir martalik
+    assert other.get("/instagram/callback?code=abc&state=forged", follow_redirects=False).status_code == 303
+    a = next(x for x in client.get("/api/me").json()["accounts"] if x["id"] == acc)
+    assert a["disconnected"] is False
+    # o'z brauzerida — odatdagidek redirect
+    loc = client.get("/instagram/connect", follow_redirects=False).headers["location"]
+    state = parse_qs(urlparse(loc).query)["state"][0]
+    r = client.get(f"/instagram/callback?code=abc&state={state}", follow_redirects=False)
+    assert r.status_code == 303 and "connected=dokon" in r.headers["location"]
+
+
 def test_inbox_tabs_and_quick_replies(client):
     acc = S["acc"]
     d = client.get(f"/api/inbox?account_id={acc}&tab=unread").json()

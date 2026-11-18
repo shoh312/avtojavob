@@ -1,5 +1,4 @@
 import asyncio
-from html import escape as html_escape
 import csv
 import io
 import json
@@ -7,7 +6,9 @@ import re
 import logging
 import secrets
 import threading
+import time
 from contextlib import asynccontextmanager
+from html import escape as html_escape
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,7 +27,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import instagram as ig
-from . import aimanager, catalog, crm, mcp, reports, services, tgbot
+from . import aimanager, catalog, crm, health, mcp, reports, services, tgbot
 from .config import settings
 from .db import get_db, init_db
 from .engine import contact_card as engine_contact_card
@@ -67,6 +68,9 @@ async def _background_loops():
                 await asyncio.to_thread(reports.run_daily)
             if tick % 720 == 0:  # ~6 soatda bir
                 await asyncio.to_thread(refresh_expiring_tokens)
+            if tick % 240 == 120:  # ~2 soatda bir: Instagram ulanishi tirikmi
+                await asyncio.to_thread(health.check_connections)
+            await asyncio.to_thread(health.check_dead_tokens)
         except Exception:
             log.exception("background loop")
         tick += 1
@@ -220,7 +224,8 @@ ONB_GOALS = {"comments", "sales", "leads", "broadcasts"}
 
 def account_json(a: IGAccount) -> dict:
     return {"id": a.id, "username": a.username, "name": a.name, "picture_url": a.picture_url,
-            "followers": a.followers or 0, "active": a.active, "token_expires_at": iso(a.token_expires_at)}
+            "followers": a.followers or 0, "active": a.active, "token_expires_at": iso(a.token_expires_at),
+            "disconnected": a.token_invalid_at is not None}
 
 
 def flow_summary(f: Flow) -> dict:
@@ -373,10 +378,43 @@ def instagram_connect(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse("/login", status_code=303)
     if not settings.ig_ready:
         return RedirectResponse("/app/accounts?ig_error=not_configured", status_code=303)
-    state = secrets.token_urlsafe(24)
-    request.session["oauth_state"] = state
-    request.session["oauth_next"] = "welcome" if request.query_params.get("next") == "welcome" else ""
+    nxt = "welcome" if request.query_params.get("next") == "welcome" else ""
+    state = _oauth_signer.dumps({"u": request.session["uid"], "n": nxt, "r": secrets.token_urlsafe(9)})
     return RedirectResponse(ig.authorize_url(state), status_code=302)
+
+
+# Telefonda Instagram havolasi ko'pincha Instagram ilovasida yoki boshqa brauzerda ochiladi — u yerda
+# ChatFlow sessiyasi yo'q. Shuning uchun foydalanuvchi state ichida (imzolangan, 30 daqiqa, bir martalik).
+_oauth_signer = URLSafeTimedSerializer(settings.SECRET_KEY, salt="chatflow-ig-oauth")
+_oauth_used: dict[str, float] = {}
+
+
+def _oauth_state(state: str | None) -> dict | None:
+    try:
+        data = _oauth_signer.loads(state or "", max_age=1800)
+    except (BadSignature, SignatureExpired):
+        return None
+    now = time.time()
+    for k, at in list(_oauth_used.items()):
+        if now - at > 1800:
+            _oauth_used.pop(k, None)
+    if not isinstance(data, dict) or data.get("r") in _oauth_used:
+        return None
+    _oauth_used[str(data.get("r"))] = now
+    return data
+
+
+def _oauth_page(ok: bool, text: str) -> HTMLResponse:
+    """Sessiyasiz brauzer (Instagram ilovasi ichida) uchun natija sahifasi."""
+    color, icon = ("#10b981", "✓") if ok else ("#e5161f", "!")
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ChatFlow</title></head><body style="margin:0;font-family:Inter,Arial,sans-serif;background:#f6f6f8;color:#111114;display:grid;place-items:center;min-height:100vh">
+<div style="background:#fff;border-radius:24px;padding:32px 24px;max-width:360px;margin:16px;text-align:center;box-shadow:0 20px 50px -25px rgba(0,0,0,.3)">
+<div style="width:64px;height:64px;border-radius:50%;background:{color};color:#fff;font-size:34px;font-weight:800;display:grid;place-items:center;margin:0 auto 16px">{icon}</div>
+<div style="font-size:22px;font-weight:800;font-style:italic;margin-bottom:12px">Chat<span style="color:#e5161f">Flow</span></div>
+<p style="font-size:16px;line-height:1.5;margin:0 0 20px">{html_escape(text)}</p>
+<a href="{settings.APP_URL}/app/accounts" style="display:inline-block;background:#e5161f;color:#fff;text-decoration:none;font-weight:600;padding:12px 22px;border-radius:12px">ChatFlow</a>
+</div></body></html>""", status_code=200 if ok else 400)
 
 
 @app.get("/instagram/callback")
@@ -384,15 +422,23 @@ def instagram_callback(request: Request, code: str | None = None, state: str | N
                        error: str | None = None, error_description: str | None = None,
                        db: Session = Depends(get_db)):
     uid = request.session.get("uid")
-    user = db.get(User, uid) if uid else None
-    if not user:
+    data = _oauth_state(state)
+    if not data and not uid:
         return RedirectResponse("/login", status_code=303)
-    base = "/welcome" if request.session.pop("oauth_next", "") == "welcome" else "/app/accounts"
-    back = lambda e: RedirectResponse(f"{base}?ig_error={quote(e[:300])}", status_code=303)  # noqa: E731
-    expected = request.session.pop("oauth_state", None)
+    in_app = not uid  # boshqa brauzer / Instagram ilovasi: sessiya yo'q, natijani sahifada ko'rsatamiz
+    base = "/welcome" if (data or {}).get("n") == "welcome" else "/app/accounts"
+
+    def back(e: str):
+        if in_app:
+            return _oauth_page(False, f"Instagram: {e[:300]}")
+        return RedirectResponse(f"{base}?ig_error={quote(e[:300])}", status_code=303)
+
     if error or not code:
         return back(error_description or error or "cancelled")
-    if not expected or state != expected:
+    if not data or (uid and data.get("u") != uid):
+        return back("state")
+    user = db.get(User, data.get("u"))
+    if not user or user.is_blocked:
         return back("state")
     try:
         short = ig.exchange_code(code)
@@ -420,11 +466,14 @@ def instagram_callback(request: Request, code: str | None = None, state: str | N
     acc.followers = int(me_.get("followers_count") or 0)
     acc.access_token_enc = encrypt(token)
     acc.token_expires_at = utcnow() + timedelta(seconds=expires_in or 60 * 86400)
+    acc.token_invalid_at = None
     acc.active = True
     onb = onboarding_of(user)
     if onb and onb.get("about") and not acc.ai_prompt:  # sehrgarda yozilgan biznes tavsifi AI sotuvchiga
         acc.ai_prompt = str(onb["about"])[:8000]
     db.commit()
+    if in_app:
+        return _oauth_page(True, f"@{acc.username} ✓ — Instagram ChatFlow'ga ulandi. Endi ChatFlow sahifasiga qayting.")
     return RedirectResponse(f"{base}?connected={quote(acc.username)}", status_code=303)
 
 

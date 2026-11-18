@@ -83,6 +83,8 @@ class IGAccount(Base):
     followers: Mapped[int] = mapped_column(Integer, default=0)
     access_token_enc: Mapped[str] = mapped_column(Text)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Instagram tokenni bekor qilgan payt (qayta ulanganda tozalanadi)
+    token_invalid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     # AI yordamchi: hech bir ssenariy mos kelmagan Direct xabarlarga javob beradi
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)

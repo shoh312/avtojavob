@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Activity, BarChart3, Blocks, KanbanSquare, ShoppingBag, Check, ChevronDown, ChevronsUpDown, UsersRound, CreditCard, Home, Inbox, Instagram, LogOut, Megaphone, Menu, Plus, Settings, SlidersHorizontal, UserCog, Workflow, X } from 'lucide-react'
+import { Activity, AlertTriangle, BarChart3, Blocks, Check, ChevronDown, ChevronsUpDown, CreditCard, Home, Inbox, Instagram, KanbanSquare, LogOut, Megaphone, Menu, Plus, RefreshCw, Settings, ShoppingBag, SlidersHorizontal, UserCog, UsersRound, Workflow, X } from 'lucide-react'
 import { useAuth } from '../auth'
 import { useI18n, type TKey } from '../i18n'
 import { api } from '../api'
@@ -200,6 +200,31 @@ export function OtpInput({ value, onChange, onDone, disabled, autoFocus }: { val
   )
 }
 
+/** Instagram tokeni bekor bo'lgan akkauntlar: hamma sahifada qizil banner + "Qayta ulash" */
+function DisconnectBanner() {
+  const { t } = useI18n()
+  const { me } = useAuth()
+  const dead = (me?.accounts || []).filter(a => a.disconnected)
+  if (!dead.length) return null
+  const owner = me?.user.role !== 'manager'
+  return (
+    <div className="border-b border-brand-700 bg-brand-600 text-white">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-8">
+        <AlertTriangle className="h-5 w-5 shrink-0" />
+        <div className="min-w-0 flex-1 text-[13.5px] leading-snug">
+          <b>{t('disc.banner', { u: dead.map(a => '@' + a.username).join(', ') })}</b>{' '}
+          <span className="text-white/85">{owner ? t('disc.banner_d') : t('disc.banner_mgr')}</span>
+        </div>
+        {owner && (
+          <a href="/instagram/connect" className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-white px-4 text-[13.5px] font-bold text-brand-700 shadow-card transition hover:bg-brand-50">
+            <RefreshCw className="h-4 w-4" />{t('disc.btn')}
+          </a>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function AppLayout() {
   const [mobile, setMobile] = useState(false)
   const loc = useLocation()
@@ -220,6 +245,7 @@ export default function AppLayout() {
         </div>
       )}
       <main className="lg:pl-[260px]">
+        <DisconnectBanner />
         {loc.pathname.startsWith('/app/inbox')
           ? <Outlet />
           : <div className={`${loc.pathname.startsWith('/app/crm') ? '' : 'mx-auto max-w-6xl '}px-4 py-5 sm:px-8 sm:py-10`}><PlanBanner /><Outlet /></div>}

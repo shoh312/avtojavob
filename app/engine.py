@@ -1004,6 +1004,10 @@ def refresh_expiring_tokens() -> None:
                 db.commit()
             except Exception as e:  # noqa: BLE001
                 db.rollback()
+                if isinstance(e, ig.IGTokenError):
+                    from .health import mark_disconnected
+                    mark_disconnected(db, acc, str(e))
+                    continue
                 db.add(EventLog(account_id=acc.id, kind="error", detail=f"token_refresh → {e}"[:1000]))
                 db.commit()
         db.query(ProcessedEvent).filter(ProcessedEvent.created_at < utcnow() - timedelta(days=14)).delete()

@@ -120,9 +120,13 @@ export default function Accounts() {
                           @{a.username}<ExternalLink className="h-3.5 w-3.5 text-ink-4" />
                         </a>
                         {current && <span className="chip bg-ink text-white">{t('acc2.current')}</span>}
-                        <span className={`chip ${a.active ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                          <span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${a.active ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />{a.active ? t('acc2.live') : t('common.paused')}
-                        </span>
+                        {a.disconnected ? (
+                          <span className="chip bg-brand-50 text-brand-700"><span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-brand-600" />{t('disc.chip')}</span>
+                        ) : (
+                          <span className={`chip ${a.active ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                            <span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${a.active ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />{a.active ? t('acc2.live') : t('common.paused')}
+                          </span>
+                        )}
                       </div>
                       <div className="mt-0.5 text-[13px] text-ink-3">
                         {a.name}{a.followers ? ` · ${t('sim.followers', { n: a.followers.toLocaleString('ru-RU') })}` : ''}
@@ -140,6 +144,22 @@ export default function Accounts() {
                       ]} />
                     </div>
                   </div>
+
+                  {a.disconnected && (
+                    <div className="mt-5 rounded-2xl border border-brand-200 bg-brand-50 p-4">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-brand-600" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[14.5px] font-bold text-brand-800">{t('disc.card_t')}</div>
+                          <p className="mt-1 text-[13px] leading-snug text-brand-900/80">{t('disc.card_d')}</p>
+                          <p className="mt-2 text-[12px] leading-snug text-brand-900/60">📱 {t('disc.mobile')}</p>
+                        </div>
+                      </div>
+                      <a href="/instagram/connect" className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-brand-600 text-[14px] font-bold text-white shadow-[0_10px_24px_-12px_rgba(229,22,31,.8)] transition hover:bg-brand-500 sm:w-auto sm:px-6">
+                        <RefreshCw className="h-4 w-4" />{t('disc.btn')}
+                      </a>
+                    </div>
+                  )}
 
                   <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {[
