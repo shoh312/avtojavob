@@ -853,7 +853,8 @@ def handle_order(db: Session, account: IGAccount, contact: Contact, product_id: 
                             f"the contact details you don't have yet (name, phone, email).]"):
         return
     has_phone = bool(contact.fields.get("phone"))
-    reply = catalog.t(account, "thanks" if has_phone else "ask_phone", contact_lang(db, contact), p=p.name)
+    lang = contact_lang(db, contact)
+    reply = catalog.t(account, "thanks" if has_phone else "ask_phone", lang, p=catalog.localized(db, p, lang)["name"])
     try:
         ig.send_dm(decrypt(account.access_token_enc), contact.igsid, {"text": reply})
         record_message(db, account.id, contact, "out", reply, "ai")

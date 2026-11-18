@@ -1840,6 +1840,7 @@ def product_create(body: dict = Body(...), user: User = Depends(current_user), d
     _apply_product(p, {"name": body.get("name"), **body})
     db.add(p)
     db.commit()
+    catalog.prewarm(p.id)
     return _product_json(p)
 
 
@@ -1848,6 +1849,8 @@ def product_update(product_id: int, body: dict = Body(...), user: User = Depends
     p = _owned_product(db, user, product_id)
     _apply_product(p, body)
     db.commit()
+    if {"name", "price", "description"} & set(body):
+        catalog.prewarm(p.id)
     return _product_json(p)
 
 

@@ -1386,6 +1386,42 @@ def test_ig_disconnect_alert_and_mobile_oauth(client, monkeypatch):
     assert r.status_code == 303 and "connected=dokon" in r.headers["location"]
 
 
+def test_product_card_translated_to_customer_lang(client, monkeypatch):
+    import json as _json
+    from app import catalog, services
+    from app.models import Product
+    acc = S["acc"]
+    monkeypatch.setattr(catalog, "prewarm", lambda pid: None)
+    calls = []
+
+    def fake_ai(db, system, text, json_mode=False, max_tokens=0):
+        calls.append(system)
+        src = _json.loads(text)
+        return _json.dumps({"name": "Qizil sumka", "price": src["price"], "description": "Charm, 3 rang"}), None
+    monkeypatch.setattr(services, "ai_available", lambda db: True)
+    monkeypatch.setattr(services, "ai_complete", fake_ai)
+    pid = client.post("/api/products", json={"account_id": acc, "name": "Красная сумка", "price": "250 сом",
+                                             "description": "Натуральная кожа, 3 цвета"}, headers=H).json()["id"]
+    with SessionLocal() as db:
+        p = db.get(Product, pid)
+        a = db.get(IGAccount, acc)
+        el = catalog.product_cards(a, [p], "uz", db)["attachment"]["payload"]["elements"][0]
+        assert el["title"] == "Qizil sumka" and el["subtitle"] == "250 сом · Charm, 3 rang" and "Uzbek" in calls[0]
+        catalog.product_cards(a, [p], "uz", db)
+        assert len(calls) == 1  # keshdan
+        el = catalog.product_cards(a, [p], "ru", db)["attachment"]["payload"]["elements"][0]
+        assert el["title"] == "Красная сумка" and len(calls) == 1  # asl tilda — tarjima kerak emas
+    client.put(f"/api/products/{pid}", json={"description": "Натуральная кожа, 5 цветов"}, headers=H)
+    with SessionLocal() as db:
+        catalog.product_cards(db.get(IGAccount, acc), [db.get(Product, pid)], "uz", db)
+        assert len(calls) == 2  # tahrirlangach — qayta tarjima
+    monkeypatch.setattr(services, "ai_complete", lambda *a, **k: (None, "down"))
+    with SessionLocal() as db:
+        el = catalog.product_cards(db.get(IGAccount, acc), [db.get(Product, pid)], "en", db)["attachment"]["payload"]["elements"][0]
+        assert el["title"] == "Красная сумка"  # AI ishlamasa — asl matn
+    client.delete(f"/api/products/{pid}", headers=H)
+
+
 def test_inbox_tabs_and_quick_replies(client):
     acc = S["acc"]
     d = client.get(f"/api/inbox?account_id={acc}&tab=unread").json()

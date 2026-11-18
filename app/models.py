@@ -392,6 +392,8 @@ class Product(Base):
     url: Mapped[str] = mapped_column(String(500), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort: Mapped[int] = mapped_column(Integer, default=0)
+    # AI tarjimalari keshi: {"uz": {"name", "price", "description", "h"}} — h: asl matn xeshi (tahrirlansa eskiradi)
+    i18n_json: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

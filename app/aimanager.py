@@ -184,7 +184,7 @@ def _apply(db: Session, cfg: Cfg, account: IGAccount, contact: Contact, data: di
         if reply:
             ig.send_dm(token, contact.igsid, {"text": reply[:1000]})
         if chosen:
-            ig.send_dm(token, contact.igsid, catalog.product_cards(account, chosen, contact_lang(db, contact)))
+            ig.send_dm(token, contact.igsid, catalog.product_cards(account, chosen, contact_lang(db, contact), db))
     except ig.IGError as e:
         log_event(db, account, contact, "error", incoming, f"ai → {e}")
         return False

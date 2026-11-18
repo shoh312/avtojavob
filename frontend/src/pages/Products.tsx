@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowRight, Copy, EyeOff, Film, Instagram, Layers, X, GripVertical, ImagePlus, LayoutGrid, List, Loader2, Package, Pencil, Plus, Search, Send, ShoppingBag, ShoppingCart, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowRight, Copy, EyeOff, Film, Instagram, Languages, Layers, X, GripVertical, ImagePlus, LayoutGrid, List, Loader2, Package, Pencil, Plus, Search, Send, ShoppingBag, ShoppingCart, Sparkles, Trash2 } from 'lucide-react'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth'
 import { useI18n, type TKey } from '../i18n'
@@ -169,6 +169,7 @@ function ProductModal({ product, accountId, onClose, onSaved }: { product: Produ
             <div className="mb-2 w-fit max-w-[90%] rounded-[16px] rounded-bl-md bg-white px-3 py-1.5 text-[12px] text-ink-2 shadow-card">{t('prod2.preview_msg')}</div>
             <ProductCard p={f} />
           </div>
+          <p className="mt-2 flex gap-1.5 text-[11.5px] leading-snug text-ink-3"><Languages className="mt-px h-3.5 w-3.5 shrink-0 text-ink-4" />{t('prod.auto_tr')}</p>
           <div className="mt-6 flex flex-col gap-2">
             <Button onClick={save} loading={busy} disabled={!f.name.trim()}>{t('common.save')}</Button>
             <Button variant="secondary" onClick={onClose}>{t('common.cancel')}</Button>
