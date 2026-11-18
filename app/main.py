@@ -1812,6 +1812,27 @@ def product_delete(product_id: int, user: User = Depends(current_user), db: Sess
     return {"ok": True}
 
 
+@app.post("/api/products/from-post")
+def product_image_from_post(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Instagram postining rasmini serverga ko'chiradi (CDN havolalari muddati o'tadi, shuning uchun saqlaymiz)."""
+    acc = owned_account(db, user, int(body.get("account_id") or 0))
+    media_id = str(body.get("media_id") or "").strip()
+    if not media_id.isdigit():
+        err("post_image")
+    try:
+        m = ig.get_media(decrypt(acc.access_token_enc), media_id)
+    except Exception:  # noqa: BLE001
+        err("post_image")
+    url = ig.media_image_url(m)
+    data = ig.fetch_image(url, limit=8 * 1024 * 1024) if url else None
+    if not data:
+        err("post_image")
+    ext = ".png" if data[1:4] == b"PNG" else ".webp" if data[8:12] == b"WEBP" else ".jpg"
+    name = f"{user.id}-{secrets.token_hex(10)}{ext}"
+    (UPLOAD_DIR / name).write_bytes(data)
+    return {"image": name, "image_url": f"{settings.APP_URL}/uploads/{name}", "caption": (m.get("caption") or "")[:1000]}
+
+
 IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
 

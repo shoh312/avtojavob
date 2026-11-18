@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowRight, Copy, EyeOff, GripVertical, ImagePlus, LayoutGrid, List, Loader2, Package, Pencil, Plus, Search, Send, ShoppingBag, ShoppingCart, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowRight, Copy, EyeOff, Film, Instagram, Layers, X, GripVertical, ImagePlus, LayoutGrid, List, Loader2, Package, Pencil, Plus, Search, Send, ShoppingBag, ShoppingCart, Sparkles, Trash2 } from 'lucide-react'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth'
 import { useI18n, type TKey } from '../i18n'
@@ -37,6 +37,58 @@ export function ProductCard({ p, compact }: { p: Pick<Product, 'name' | 'price' 
   )
 }
 
+type IgPost = { id: string; caption: string; thumbnail: string | null; type: string }
+type FromPost = { image: string; image_url: string; caption: string }
+
+/** Instagram postlari: tanlangan postning rasmi mahsulotga qo'yiladi */
+function PostPicker({ accountId, onPick, onClose }: { accountId: number; onPick: (r: FromPost) => void; onClose: () => void }) {
+  const { t } = useI18n()
+  const toast = useToast()
+  const [posts, setPosts] = useState<IgPost[] | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  useEffect(() => {
+    api.get<{ items: IgPost[] }>(`/api/accounts/${accountId}/media`).then(r => setPosts(r.items)).catch(() => setPosts([]))
+  }, [accountId])
+  const pick = async (m: IgPost) => {
+    if (busy) return
+    setBusy(m.id)
+    try {
+      onPick(await api.post<FromPost>('/api/products/from-post', { account_id: accountId, media_id: m.id }))
+    } catch {
+      toast(t('err.post_image'), 'error')
+    } finally { setBusy(null) }
+  }
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-start gap-3 px-5 pb-3 pt-5">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[#f58529] via-[#dd2a7b] to-[#8134af] text-white"><Instagram className="h-5 w-5" /></span>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-[16px] font-bold leading-tight">{t('prod.ig_posts')}</h3>
+          <p className="mt-0.5 text-[12.5px] leading-snug text-ink-3">{t('prod.ig_posts_sub')}</p>
+        </div>
+        <button onClick={onClose} aria-label="close" className="-mr-1.5 grid h-8 w-8 shrink-0 place-items-center rounded-full text-ink-3 hover:bg-soft hover:text-ink"><X className="h-4 w-4" /></button>
+      </div>
+      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 pb-5">
+        {posts === null ? <div className="grid h-40 place-items-center"><Loader2 className="h-6 w-6 animate-spin text-ink-4" /></div>
+          : posts.length === 0 ? <p className="py-10 text-center text-[13px] text-ink-4">{t('prod.ig_empty')}</p> : (
+            <div className="grid grid-cols-3 gap-1.5">
+              {posts.map(m => (
+                <button key={m.id} type="button" title={m.caption} onClick={() => pick(m)} disabled={!!busy}
+                  className="group relative aspect-square overflow-hidden rounded-xl bg-soft transition hover:ring-[3px] hover:ring-brand-600 disabled:cursor-wait">
+                  {m.thumbnail ? <img src={m.thumbnail} alt="" loading="lazy" className="h-full w-full object-cover transition duration-300 group-hover:scale-105" />
+                    : <span className="block p-1.5 text-left text-[10.5px] leading-tight text-ink-3">{m.caption.slice(0, 60)}</span>}
+                  {m.type === 'VIDEO' && <Film className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-white drop-shadow" />}
+                  {m.type === 'CAROUSEL_ALBUM' && <Layers className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-white drop-shadow" />}
+                  {busy === m.id && <span className="absolute inset-0 grid place-items-center bg-white/70"><Loader2 className="h-5 w-5 animate-spin text-brand-600" /></span>}
+                </button>
+              ))}
+            </div>
+          )}
+      </div>
+    </div>
+  )
+}
+
 function ProductModal({ product, accountId, onClose, onSaved }: { product: Product | null; accountId: number; onClose: () => void; onSaved: () => void }) {
   const { t } = useI18n()
   const toast = useToast()
@@ -46,7 +98,16 @@ function ProductModal({ product, accountId, onClose, onSaved }: { product: Produ
   })
   const [busy, setBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [posts, setPosts] = useState(false)
   const input = useRef<HTMLInputElement>(null)
+  const fromPost = (r: FromPost) => {
+    // tavsif bo'sh bo'lsa — post matnini (heshteglarsiz) qo'yamiz
+    const caption = r.caption.replace(/(^|\s)#[^\s#]+/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 1000)
+    setF(x => ({ ...x, image: r.image, image_url: r.image_url, description: x.description.trim() ? x.description : caption }))
+    setPosts(false)
+    toast(t('prod.ig_done'))
+  }
+  const picker = posts ? <PostPicker accountId={accountId} onPick={fromPost} onClose={() => setPosts(false)} /> : null
 
   const upload = async (file?: File | null) => {
     if (!file) return
@@ -73,7 +134,7 @@ function ProductModal({ product, accountId, onClose, onSaved }: { product: Produ
   }
 
   return (
-    <Modal open onClose={onClose} wide title={product ? product.name : t('prod.new')} sub={t('prod2.modal_sub')} icon={<ShoppingBag className="h-5 w-5" />}>
+    <Modal open onClose={onClose} wide aside={picker} title={product ? product.name : t('prod.new')} sub={t('prod2.modal_sub')} icon={<ShoppingBag className="h-5 w-5" />}>
       <div className="grid gap-6 md:grid-cols-[1fr_230px]">
         <div className="space-y-4">
           <div onDragOver={e => e.preventDefault()} onDrop={onDrop} onClick={() => input.current?.click()}
@@ -83,6 +144,11 @@ function ProductModal({ product, accountId, onClose, onSaved }: { product: Produ
             {uploading && <div className="absolute inset-0 grid place-items-center bg-white/70"><Loader2 className="h-6 w-6 animate-spin text-brand-600" /></div>}
             <input ref={input} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={e => upload(e.target.files?.[0])} />
           </div>
+          <button type="button" onClick={() => setPosts(v => !v)}
+            className={`-mt-1 flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-[13.5px] font-semibold transition ${posts ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-line text-ink-2 hover:border-brand-300 hover:bg-brand-50/40'}`}>
+            <Instagram className="h-4 w-4" />{t('prod.from_ig')}
+          </button>
+          {posts && <div className="flex max-h-[420px] flex-col overflow-hidden rounded-2xl border border-line lg:hidden">{picker}</div>}
           <div className="grid gap-3 sm:grid-cols-[1fr_160px]">
             <label className="block"><span className="label">{t('prod.name')}</span>
               <input className="input" maxLength={80} value={f.name} placeholder="Cyberlab" onChange={e => setF({ ...f, name: e.target.value })} /></label>

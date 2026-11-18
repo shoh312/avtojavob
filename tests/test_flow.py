@@ -1324,6 +1324,26 @@ def test_products_stats_and_reorder(client):
     client.delete(f"/api/products/{b['id']}", headers=H)
 
 
+def test_product_image_from_post(client, monkeypatch):
+    acc = S["acc"]
+    jpg = b"\xff\xd8\xff\xe0" + b"0" * 100
+    seen = {}
+    monkeypatch.setattr(ig, "get_media", lambda token, mid: {
+        "id": mid, "media_type": "CAROUSEL_ALBUM", "caption": "Yangi sumka #moda",
+        "children": {"data": [{"media_type": "VIDEO", "thumbnail_url": "https://scontent.cdninstagram.com/v.jpg"}]}})
+
+    def fake_fetch(url, limit=0):
+        seen["url"] = url
+        return jpg
+    monkeypatch.setattr(ig, "fetch_image", fake_fetch)
+    r = client.post("/api/products/from-post", json={"account_id": acc, "media_id": "1789"}, headers=H).json()
+    assert seen["url"].endswith("/v.jpg") and r["image"].endswith(".jpg") and r["caption"] == "Yangi sumka #moda"
+    assert client.get(f"/uploads/{r['image']}").content == jpg
+    assert client.post("/api/products/from-post", json={"account_id": acc, "media_id": "../x"}, headers=H).status_code == 400
+    monkeypatch.setattr(ig, "fetch_image", lambda url, limit=0: None)
+    assert client.post("/api/products/from-post", json={"account_id": acc, "media_id": "1789"}, headers=H).json()["error"] == "post_image"
+
+
 def test_inbox_tabs_and_quick_replies(client):
     acc = S["acc"]
     d = client.get(f"/api/inbox?account_id={acc}&tab=unread").json()
@@ -1534,3 +1554,4 @@ def test_mcp_server(client):
     assert client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
                        headers={"Authorization": f"Bearer {ro['token']}"}).status_code == 401
     assert client.get("/mcp").status_code == 405
+

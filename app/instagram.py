@@ -132,6 +132,24 @@ def list_media(token: str, limit: int = 30) -> list[dict]:
     return data.get("data", [])
 
 
+def get_media(token: str, media_id: str) -> dict:
+    return _json(_client.get(_graph(media_id), params={
+        "fields": "id,caption,media_type,media_url,thumbnail_url,children{media_type,media_url,thumbnail_url}",
+        "access_token": token,
+    }))
+
+
+def media_image_url(m: dict) -> str | None:
+    """Post rasmi: rasm — o'zi, video — muqovasi, karusel — birinchi elementi."""
+    if m.get("media_type") == "CAROUSEL_ALBUM":
+        kids = (m.get("children") or {}).get("data") or []
+        if kids:
+            m = kids[0]
+    if m.get("media_type") == "VIDEO":
+        return m.get("thumbnail_url")
+    return m.get("media_url") or m.get("thumbnail_url")
+
+
 # ---------- Javoblar ----------
 
 def reply_to_comment(token: str, comment_id: str, text: str) -> dict:

@@ -37,8 +37,10 @@ export function Toggle({ checked, onChange, size = 'md' }: { checked: boolean; o
 }
 
 /** Oyna: body'ga portal orqali chiqadi (ota elementning rangi/transformi ta'sir qilmaydi). */
-export function Modal({ open, onClose, title, sub, icon, children, wide }: {
+export function Modal({ open, onClose, title, sub, icon, children, wide, aside }: {
   open: boolean; onClose: () => void; title?: ReactNode; sub?: ReactNode; icon?: ReactNode; children: ReactNode; wide?: boolean
+  /** katta ekranda oyna yonida chiqadigan panel */
+  aside?: ReactNode
 }) {
   useEffect(() => {
     if (!open) return
@@ -51,6 +53,9 @@ export function Modal({ open, onClose, title, sub, icon, children, wide }: {
   if (!open) return null
   return createPortal(
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-[#0b0b10]/45 p-0 text-left text-ink backdrop-blur-[3px] animate-[fade-in_.2s_ease-out] sm:items-center sm:p-4" onMouseDown={onClose}>
+      {aside && <div onMouseDown={e => e.stopPropagation()} className="relative mr-4 hidden w-[340px] shrink-0 self-center lg:block" style={{ height: 'min(94vh, 760px)' }}>
+        <div className="modal-pop absolute inset-0 flex flex-col overflow-hidden rounded-[28px] bg-white shadow-[0_40px_80px_-30px_rgba(10,10,20,.45)] ring-1 ring-black/5">{aside}</div>
+      </div>}
       <div role="dialog" aria-modal="true" onMouseDown={e => e.stopPropagation()}
         className={`modal-pop flex max-h-[94vh] w-full flex-col overflow-hidden rounded-t-[28px] bg-white shadow-[0_40px_80px_-30px_rgba(10,10,20,.45)] ring-1 ring-black/5 sm:rounded-[28px] ${wide ? 'sm:max-w-3xl' : 'sm:max-w-md'}`}>
         <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-[#e2e2e8] sm:hidden" />
