@@ -5,17 +5,17 @@ import { useAuth } from '../auth'
 import { LANGS, useI18n, useTimeAgo, type Lang, type TKey } from '../i18n'
 import { Button, Empty, PageHeader, useToast } from '../components/ui'
 import { Onboarding } from './Home'
+import { DECORS, DEFAULT_STYLE, FONTS, LAYOUTS, PALETTES, H, W, drawSlide, layoutOf, loadFonts, loadImage, type Slide, type Style } from './carousel'
 
 type Kind = 'hooks' | 'reels' | 'carousel'
 type Goal = 'sell' | 'engage' | 'expert' | 'story'
 type Hook = { text: string; type: string; why: string }
 type Scene = { time: string; visual: string; voice: string; text: string }
-type Slide = { title: string; body: string }
 type Data = {
   title: string
   hooks?: (Hook | string)[]
   duration?: string; scenes?: Scene[]; cta?: string; tips?: string[]
-  slides?: Slide[]
+  slides?: Slide[]; style?: Style
   caption?: string; hashtags?: string[]
 }
 type Draft = { id: number; kind: Kind; topic: string; title: string; created_at: string; data: Data; params: { goal?: Goal; lang?: Lang; slides?: number; seconds?: number; product_id?: number | null } }
@@ -166,111 +166,20 @@ function ReelsView({ d }: { d: Data }) {
   )
 }
 
-// ---------------------------------------------------------------- karusel (canvas → PNG)
+// ---------------------------------------------------------------- karusel (canvas → PNG, dizaynni AI tanlaydi)
 
-type Theme = { key: string; bg: [string, string]; title: string; body: string; accent: string; muted: string }
-const THEMES: Theme[] = [
-  { key: 'red', bg: ['#f8333b', '#a01017'], title: '#ffffff', body: 'rgba(255,255,255,.88)', accent: '#ffffff', muted: 'rgba(255,255,255,.6)' },
-  { key: 'dark', bg: ['#1b1b22', '#2a1530'], title: '#ffffff', body: 'rgba(255,255,255,.82)', accent: '#ff6369', muted: 'rgba(255,255,255,.5)' },
-  { key: 'light', bg: ['#fff7f0', '#ffe9e0'], title: '#1b1b22', body: '#3d3d47', accent: '#e5161f', muted: '#8a8a96' },
-]
-const W = 1080, H = 1350, PAD = 96
-const FONT = "Inter, 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif"
-
-function wrap(ctx: CanvasRenderingContext2D, text: string, width: number): string[] {
-  const out: string[] = []
-  for (const para of text.split('\n')) {
-    let line = ''
-    for (const word of para.split(/\s+/).filter(Boolean)) {
-      const test = line ? `${line} ${word}` : word
-      if (ctx.measureText(test).width > width && line) { out.push(line); line = word } else line = test
-    }
-    out.push(line)
-  }
-  return out
-}
-
-/** Matn sig'guncha shrift o'lchamini kichraytiradi. */
-function fit(ctx: CanvasRenderingContext2D, text: string, weight: number, size: number, min: number, maxLines: number) {
-  let s = size
-  let lines: string[] = []
-  for (; s >= min; s -= 4) {
-    ctx.font = `${weight} ${s}px ${FONT}`
-    lines = wrap(ctx, text, W - PAD * 2)
-    if (lines.length <= maxLines) break
-  }
-  return { size: Math.max(s, min), lines }
-}
-
-function drawSlide(cv: HTMLCanvasElement, s: Slide, i: number, total: number, th: Theme, handle: string) {
-  const ctx = cv.getContext('2d')
-  if (!ctx) return
-  cv.width = W; cv.height = H
-  const g = ctx.createLinearGradient(0, 0, W, H)
-  g.addColorStop(0, th.bg[0]); g.addColorStop(1, th.bg[1])
-  ctx.fillStyle = g
-  ctx.fillRect(0, 0, W, H)
-  // bezak: yumshoq doira
-  ctx.globalAlpha = 0.12
-  ctx.fillStyle = th.accent
-  ctx.beginPath(); ctx.arc(W - 120, 140, 260, 0, Math.PI * 2); ctx.fill()
-  ctx.globalAlpha = 1
-
-  const first = i === 0, last = i === total - 1
-  ctx.textBaseline = 'alphabetic'
-  ctx.fillStyle = th.muted
-  ctx.font = `600 34px ${FONT}`
-  ctx.fillText(handle ? `@${handle}` : '', PAD, 130)
-  ctx.textAlign = 'right'
-  ctx.fillText(`${i + 1}/${total}`, W - PAD, 130)
-  ctx.textAlign = 'left'
-
-  const title = fit(ctx, s.title || '', 800, first ? 104 : 80, 48, first ? 6 : 4)
-  const body = fit(ctx, s.body || '', 500, first ? 46 : 44, 30, 9)
-  const tH = title.lines.length * title.size * 1.12
-  const bH = s.body ? body.lines.length * body.size * 1.4 + 48 : 0
-  let y = first ? Math.max(260, (H - tH - bH) / 2) : 300
-  if (!first) {
-    ctx.fillStyle = th.accent
-    ctx.fillRect(PAD, y - 70, 90, 10)
-  }
-  ctx.fillStyle = th.title
-  ctx.font = `800 ${title.size}px ${FONT}`
-  for (const l of title.lines) { y += title.size * 1.12; ctx.fillText(l, PAD, y) }
-  if (s.body) {
-    y += 48
-    ctx.fillStyle = th.body
-    ctx.font = `500 ${body.size}px ${FONT}`
-    for (const l of body.lines) { y += body.size * 1.4; ctx.fillText(l, PAD, y) }
-  }
-  // pastki qism: nuqtalar + "suring"
-  const dot = 14, gap = 12
-  for (let k = 0; k < total; k++) {
-    ctx.fillStyle = k === i ? th.accent : th.muted
-    ctx.globalAlpha = k === i ? 1 : 0.45
-    ctx.beginPath(); ctx.arc(PAD + k * (dot + gap) + dot / 2, H - 110, dot / 2, 0, Math.PI * 2); ctx.fill()
-  }
-  ctx.globalAlpha = 1
-  if (!last) {
-    ctx.fillStyle = th.title
-    ctx.font = `700 40px ${FONT}`
-    ctx.textAlign = 'right'
-    ctx.fillText('→', W - PAD, H - 96)
-    ctx.textAlign = 'left'
-  }
-}
-
-function SlideCanvas({ s, i, total, theme, handle, register }: { s: Slide; i: number; total: number; theme: Theme; handle: string; register: (i: number, el: HTMLCanvasElement | null) => void }) {
+function SlideCanvas({ s, i, total, style, handle, photo, register }: { s: Slide; i: number; total: number; style: Style; handle: string; photo: string; register: (i: number, el: HTMLCanvasElement | null) => void }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const el = ref.current
     if (!el) return
     let live = true
-    const draw = () => { if (live) drawSlide(el, s, i, total, theme, handle) }
-    draw()
-    document.fonts?.ready.then(draw).catch(() => {})
+    const sample = [s.title, s.body, ...(s.items || []), s.big || ''].join(' ')
+    const img = layoutOf(s, i, total) === 'photo' && photo ? loadImage(photo) : Promise.resolve(null)
+    drawSlide(el, s, i, total, style, handle, null)
+    Promise.all([loadFonts(style, sample), img]).then(([, im]) => { if (live) drawSlide(el, s, i, total, style, handle, im) })
     return () => { live = false }
-  }, [s, i, total, theme, handle])
+  }, [s, i, total, style, handle, photo])
   useEffect(() => { register(i, ref.current); return () => register(i, null) }, [i, register])
   return <canvas ref={ref} width={W} height={H} className="aspect-[4/5] w-full rounded-xl shadow-card" />
 }
@@ -286,21 +195,22 @@ function download(cv: HTMLCanvasElement, name: string) {
   }, 'image/png')
 }
 
-function CarouselView({ draft, onSaved }: { draft: Draft; onSaved: (d: Draft) => void }) {
+function CarouselView({ draft, photo, onSaved }: { draft: Draft; photo: string; onSaved: (d: Draft) => void }) {
   const { t } = useI18n()
   const { account } = useAuth()
   const toast = useToast()
+  const initStyle = (): Style => ({ ...DEFAULT_STYLE, ...(draft.data.style || {}) })
   const [slides, setSlides] = useState<Slide[]>(draft.data.slides || [])
-  const [theme, setTheme] = useState(THEMES[0])
+  const [style, setStyle] = useState<Style>(initStyle)
   const [saving, setSaving] = useState(false)
   const canvases = useRef<(HTMLCanvasElement | null)[]>([])
   const register = useCallback((i: number, el: HTMLCanvasElement | null) => { canvases.current[i] = el }, [])
-  useEffect(() => setSlides(draft.data.slides || []), [draft])
-  const dirty = JSON.stringify(slides) !== JSON.stringify(draft.data.slides || [])
+  useEffect(() => { setSlides(draft.data.slides || []); setStyle(initStyle()) }, [draft])  // eslint-disable-line react-hooks/exhaustive-deps
+  const dirty = JSON.stringify({ slides, style }) !== JSON.stringify({ slides: draft.data.slides || [], style: initStyle() })
   const edit = (i: number, patch: Partial<Slide>) => setSlides(xs => xs.map((x, k) => (k === i ? { ...x, ...patch } : x)))
   const save = async () => {
     setSaving(true)
-    try { onSaved(await api.put<Draft>(`/api/content/${draft.id}`, { data: { ...draft.data, slides } })); toast(t('common.saved')) }
+    try { onSaved(await api.put<Draft>(`/api/content/${draft.id}`, { data: { ...draft.data, slides, style } })); toast(t('common.saved')) }
     catch { toast(t('common.error')) } finally { setSaving(false) }
   }
   const all = async () => {
@@ -310,32 +220,47 @@ function CarouselView({ draft, onSaved }: { draft: Draft; onSaved: (d: Draft) =>
       await new Promise(r => setTimeout(r, 350))
     }
   }
-  const handle = account?.username || ''
+  const chip = (on: boolean) => `rounded-lg border px-2.5 py-1 text-[12px] font-semibold ${on ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-line hover:bg-soft'}`
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[12.5px] font-semibold text-ink-3">{t('cnt.theme')}</span>
-        {THEMES.map(th => (
-          <button key={th.key} onClick={() => setTheme(th)} title={th.key}
-            className={`h-8 w-8 rounded-full border-2 ${theme.key === th.key ? 'border-ink' : 'border-transparent'}`}
-            style={{ background: `linear-gradient(135deg, ${th.bg[0]}, ${th.bg[1]})` }} />
-        ))}
-        <div className="ml-auto flex gap-2">
-          {dirty && <Button size="sm" variant="secondary" loading={saving} onClick={save}>{t('common.save')}</Button>}
-          <Button size="sm" onClick={all}><Download className="h-4 w-4" />{t('cnt.download_all')}</Button>
+      <div className="card space-y-3 p-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {Object.entries(PALETTES).map(([k, p]) => (
+            <button key={k} onClick={() => setStyle(s => ({ ...s, palette: k }))} title={k}
+              className={`h-8 w-8 rounded-full border-2 ${style.palette === k ? 'border-ink' : 'border-line'}`}
+              style={{ background: `linear-gradient(135deg, ${p.bg[0]} 55%, ${p.accent} 55%)` }} />
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {Object.entries(FONTS).map(([k, f]) => <button key={k} onClick={() => setStyle(s => ({ ...s, font: k }))} className={chip(style.font === k)} style={{ fontFamily: f.head }}>{f.label}</button>)}
+          <span className="mx-1 h-5 w-px bg-line" />
+          {DECORS.map(k => <button key={k} onClick={() => setStyle(s => ({ ...s, decor: k }))} className={chip(style.decor === k)}>{k}</button>)}
+          <div className="ml-auto flex gap-2">
+            {dirty && <Button size="sm" variant="secondary" loading={saving} onClick={save}>{t('common.save')}</Button>}
+            <Button size="sm" onClick={all}><Download className="h-4 w-4" />{t('cnt.download_all')}</Button>
+          </div>
         </div>
       </div>
       <p className="text-[12px] text-ink-4">{t('cnt.edit_hint')}</p>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {slides.map((s, i) => (
-          <div key={i} className="space-y-2">
-            <SlideCanvas s={s} i={i} total={slides.length} theme={theme} handle={handle} register={register} />
-            <input className="input text-[13px] font-semibold" value={s.title} maxLength={120} onChange={e => edit(i, { title: e.target.value })} />
-            <textarea className="input resize-y text-[12.5px]" rows={2} value={s.body} maxLength={400} onChange={e => edit(i, { body: e.target.value })} />
-            <button onClick={() => { const cv = canvases.current[i]; if (cv) download(cv, `carousel-${draft.id}-${i + 1}.png`) }}
-              className="inline-flex items-center gap-1 text-[12px] font-semibold text-ink-3 hover:text-ink"><Download className="h-3.5 w-3.5" />PNG</button>
-          </div>
-        ))}
+        {slides.map((s, i) => {
+          const lay = layoutOf(s, i, slides.length)
+          return (
+            <div key={i} className="space-y-2">
+              <SlideCanvas s={s} i={i} total={slides.length} style={style} handle={account?.username || ''} photo={photo} register={register} />
+              <select className="input py-1.5 text-[12.5px]" value={lay} onChange={e => edit(i, { layout: e.target.value })}>
+                {LAYOUTS.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+              <input className="input text-[13px] font-semibold" value={s.title} maxLength={120} onChange={e => edit(i, { title: e.target.value })} />
+              {(lay === 'number' || lay === 'cta') && <input className="input text-[13px]" value={s.big || ''} maxLength={16} placeholder="87% / СТАРТ" onChange={e => edit(i, { big: e.target.value })} />}
+              {['list', 'steps', 'compare'].includes(lay)
+                ? <textarea className="input resize-y text-[12.5px]" rows={4} value={(s.items || []).join('\n')} onChange={e => edit(i, { items: e.target.value.split('\n').slice(0, 6) })} />
+                : <textarea className="input resize-y text-[12.5px]" rows={2} value={s.body} maxLength={400} onChange={e => edit(i, { body: e.target.value })} />}
+              <button onClick={() => { const cv = canvases.current[i]; if (cv) download(cv, `carousel-${draft.id}-${i + 1}.png`) }}
+                className="inline-flex items-center gap-1 text-[12px] font-semibold text-ink-3 hover:text-ink"><Download className="h-3.5 w-3.5" />PNG</button>
+            </div>
+          )
+        })}
       </div>
       <Caption d={draft.data} />
     </div>
@@ -356,7 +281,7 @@ export default function Content() {
   const [slides, setSlides] = useState(7)
   const [seconds, setSeconds] = useState(30)
   const [productId, setProductId] = useState(0)
-  const [products, setProducts] = useState<{ id: number; name: string }[]>([])
+  const [products, setProducts] = useState<{ id: number; name: string; image_url?: string | null }[]>([])
   const [list, setList] = useState<ListResp | null>(null)
   const [cur, setCur] = useState<Draft | null>(null)
   const [busy, setBusy] = useState(false)
@@ -369,7 +294,7 @@ export default function Content() {
   useEffect(load, [load])
   useEffect(() => {
     if (!account) return
-    api.get<{ items: { id: number; name: string; active: boolean }[] }>(`/api/products?account_id=${account.id}`)
+    api.get<{ items: { id: number; name: string; active: boolean; image_url?: string | null }[] }>(`/api/products?account_id=${account.id}`)
       .then(r => setProducts(r.items.filter(p => p.active))).catch(() => setProducts([]))
   }, [account])
   if (!account) return <Onboarding />
@@ -488,7 +413,7 @@ export default function Content() {
                 </div>
                 {cur.kind === 'hooks' && <HooksView d={cur.data} onScript={toScript} />}
                 {cur.kind === 'reels' && <ReelsView d={cur.data} />}
-                {cur.kind === 'carousel' && <CarouselView draft={cur} onSaved={d => { setCur(d); load() }} />}
+                {cur.kind === 'carousel' && <CarouselView draft={cur} photo={products.find(p => p.id === cur.params.product_id)?.image_url || ''} onSaved={d => { setCur(d); load() }} />}
               </div>
             )}
           </div>

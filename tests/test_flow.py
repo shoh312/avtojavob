@@ -1006,7 +1006,7 @@ def test_ai_content_assistant(client, monkeypatch):
     cid = r["id"]
     slides = [{"title": "Yangi", "body": ""}, {"title": "Oxirgi", "body": "CTA"}]
     r = client.put(f"/api/content/{cid}", json={"data": {**r["data"], "slides": slides}}, headers=H).json()
-    assert r["data"]["slides"] == slides
+    assert [(x["title"], x["layout"]) for x in r["data"]["slides"]] == [("Yangi", "cover"), ("Oxirgi", "cta")] and r["data"]["style"]["palette"] == "brand"
 
     lst = client.get(f"/api/content?account_id={acc}").json()
     assert lst["used_today"] == 3 and [x["kind"] for x in lst["items"]] == ["carousel", "reels", "hooks"]

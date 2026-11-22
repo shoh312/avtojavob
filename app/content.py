@@ -38,7 +38,28 @@ def _context(business: str, catalog: str, captions: list[str], username: str, pr
     return "\n\n".join(p for p in parts if p)
 
 
-def system_prompt(kind: str, lang: str, goal: str, *, slides: int = 7, seconds: int = 30) -> str:
+# Karusel dizayni: AI shu ro'yxatlardan tanlaydi, chizish brauzerda (Content.tsx) — sifat doim barqaror bo'ladi
+PALETTES = {
+    "brand": "bold red & white — energetic, sales, promo",
+    "midnight": "dark navy-violet with pink accent — premium, tech, night",
+    "cream": "warm cream with red accent — cozy, food, handmade, cafe",
+    "mint": "fresh mint with dark green — health, cosmetics, eco, medicine",
+    "ocean": "deep blue with yellow accent — services, education, finance, trust",
+    "sunset": "orange-to-pink gradient — fashion, beauty, lifestyle, young audience",
+    "mono": "black & white minimal — luxury, design, clothing, expert",
+    "lavender": "soft lavender with purple — kids, gifts, flowers, gentle",
+}
+FONTS = {
+    "modern": "Montserrat — clean and confident (default choice)",
+    "bold": "Unbounded — loud, wide, youthful",
+    "elegant": "Playfair Display serif — premium, beauty, fashion",
+    "playful": "Rubik rounded — friendly, kids, food",
+}
+DECORS = ("blobs", "grid", "lines", "none")
+LAYOUTS = ("cover", "text", "list", "steps", "number", "quote", "compare", "photo", "cta")
+
+
+def system_prompt(kind: str, lang: str, goal: str, *, slides: int = 7, seconds: int = 30, has_photo: bool = False) -> str:
     language = LANG_NAMES.get(lang, "Russian")
     goal_text = GOALS.get(goal, GOALS["sell"])
     head = f"""You are a senior Instagram content strategist and copywriter for small businesses in Central Asia.
@@ -60,13 +81,37 @@ Task: write a Reels script of about {seconds} seconds.
 JSON: {{"title": "...", "duration": "{seconds} s", "hooks": ["...", "...", "..."],
 "scenes": [{{"time": "0-3 s", "visual": "...", "voice": "...", "text": "..."}}],
 "cta": "...", "caption": "...", "hashtags": ["#..."], "tips": ["2-3 short filming tips"]}}"""
+    photo = ('\n- The focus product has a photo: use layout "photo" for slide 1 or 2 to show it.' if has_photo else "")
+    palettes = "\n".join(f'  - "{k}": {v}' for k, v in PALETTES.items())
+    fonts = "\n".join(f'  - "{k}": {v}' for k, v in FONTS.items())
     return head + f"""
-Task: write an Instagram carousel of exactly {slides} slides.
-- Slide 1 = the hook (title max 8 words, body optional, max 12 words). It must make people swipe.
-- Middle slides: ONE idea per slide. Title max 7 words, body max 30 words. Keep a logical progression.
+Task: write AND design an Instagram carousel of exactly {slides} slides. You are also the art director.
+Content rules:
+- Slide 1 = the hook (title max 8 words). It must make people swipe.
+- Middle slides: ONE idea per slide, logical progression. Title max 7 words, body max 30 words, list items max 8 words each.
 - Last slide = CTA that fits the goal (save / share / comment a keyword / DM).
 - Caption: 2-5 short lines ending with the CTA. 8-15 hashtags.
-JSON: {{"title": "...", "slides": [{{"title": "...", "body": "..."}}], "caption": "...", "hashtags": ["#..."]}}"""
+Design rules — choose for each slide the layout that fits its content best, and VARY layouts (never 3 identical in a row):
+  - "cover": slide 1 only. Huge title, optional short body, one emoji.
+  - "text": a title and a paragraph.
+  - "list": a title and 3-5 short "items" (tips, reasons, features).
+  - "steps": a title and 3-5 sequential "items" (how-to, order process).
+  - "number": a striking figure in "big" (e.g. "3×", "87%", "24/7", "289 c.") + title + short body.
+  - "quote": a customer review or strong statement in "body", the author/source in "title".
+  - "compare": "items" = exactly 2 strings: the bad/before option first, the good/after option second; title above.
+  - "photo": product photo + title + short body (only if a photo is available).
+  - "cta": last slide only. Title, short body, and the keyword to comment / action in "big" (max 2 words).{photo}
+- "highlight": 1-2 words from the title to paint in the accent color.
+- "emoji": one fitting emoji per slide or "".
+Overall style — pick what fits this business, niche and mood:
+- "palette", one of:
+{palettes}
+- "font", one of:
+{fonts}
+- "decor", one of: "blobs" (soft circles), "grid" (dot grid), "lines" (diagonal stripes), "none".
+JSON: {{"title": "...", "style": {{"palette": "...", "font": "...", "decor": "..."}},
+"slides": [{{"layout": "...", "title": "...", "body": "...", "items": ["..."], "big": "...", "highlight": "...", "emoji": "..."}}],
+"caption": "...", "hashtags": ["#..."]}}"""
 
 
 def user_prompt(topic: str, business: str, catalog: str, captions: list[str], username: str, product: str) -> str:
@@ -137,9 +182,35 @@ def normalize(kind: str, data: dict, slides: int = 7) -> dict:
                 "hashtags": _tags(data.get("hashtags")), "tips": [_s(x, 200) for x in (data.get("tips") or []) if _s(x, 200)][:5]}
     out = []
     for sl in data.get("slides") or []:
-        if isinstance(sl, dict) and (sl.get("title") or sl.get("body")):
-            out.append({"title": _s(sl.get("title"), 120), "body": _s(sl.get("body"), 400)})
+        if not isinstance(sl, dict):
+            continue
+        items = [_s(x, 160) for x in (sl.get("items") or []) if isinstance(x, (str, int, float)) and _s(x, 160)][:6]
+        if not (sl.get("title") or sl.get("body") or items):
+            continue
+        layout = str(sl.get("layout") or "")
+        out.append({"layout": layout if layout in LAYOUTS else "", "title": _s(sl.get("title"), 120),
+                    "body": _s(sl.get("body"), 400), "items": items, "big": _s(sl.get("big"), 16),
+                    "highlight": _s(sl.get("highlight"), 60), "emoji": _s(sl.get("emoji"), 8)})
     if len(out) < 2:
         raise ValueError("no slides")
-    return {"title": title, "slides": out[:max(2, min(slides + 2, 12))], "caption": _s(data.get("caption"), 2200),
+    out = out[:max(2, min(slides + 2, 12))]
+    # yaroqsiz yoki bo'sh turlarni mazmunga qarab tuzatamiz
+    for i, sl in enumerate(out):
+        lay = sl["layout"]
+        if i == 0 and lay not in ("cover", "photo", "number"):
+            lay = "cover"
+        elif i == len(out) - 1 and lay != "cta":
+            lay = "cta"
+        elif lay in ("list", "steps") and len(sl["items"]) < 2 or lay == "compare" and len(sl["items"]) != 2:
+            lay = "text"
+        elif lay == "number" and not sl["big"]:
+            lay = "text"
+        elif lay in ("cover", "cta", "") and 0 < i < len(out) - 1:
+            lay = "list" if len(sl["items"]) >= 2 else "text"
+        sl["layout"] = lay
+    st = data.get("style") if isinstance(data.get("style"), dict) else {}
+    style = {"palette": st.get("palette") if st.get("palette") in PALETTES else "brand",
+             "font": st.get("font") if st.get("font") in FONTS else "modern",
+             "decor": st.get("decor") if st.get("decor") in DECORS else "blobs"}
+    return {"title": title, "style": style, "slides": out, "caption": _s(data.get("caption"), 2200),
             "hashtags": _tags(data.get("hashtags"))}

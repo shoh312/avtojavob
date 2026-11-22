@@ -2122,12 +2122,12 @@ def content_generate(body: dict = Body(...), user: User = Depends(current_user),
     if used >= content.DAILY_LIMIT and not user.is_admin:
         err("daily_limit", 429)
     products = catalog.active_products(db, acc.id)
-    product = ""
+    product, has_photo = "", False
     pid = int(body.get("product_id") or 0)
     if pid:
         p = next((x for x in products if x.id == pid), None)
         if p:
-            product = catalog.catalog_text([p])
+            product, has_photo = catalog.catalog_text([p]), bool(p.image)
     if not topic and not product:
         err("empty")
     try:  # akkaunt ovozi uchun so'nggi post matnlari (bo'lmasa ham ishlayveradi)
@@ -2135,7 +2135,7 @@ def content_generate(body: dict = Body(...), user: User = Depends(current_user),
                     for m in ig.list_media(decrypt(acc.access_token_enc), limit=12) if m.get("caption")]
     except Exception:  # noqa: BLE001
         captions = []
-    system = content.system_prompt(kind, lang, goal, slides=slides, seconds=seconds)
+    system = content.system_prompt(kind, lang, goal, slides=slides, seconds=seconds, has_photo=has_photo)
     prompt = content.user_prompt(topic, acc.ai_prompt or "", catalog.catalog_text(products), captions[:10],
                                  acc.username or "", product)
     data, error = None, ""
