@@ -30,19 +30,27 @@ const FALLBACK = "'Segoe UI', system-ui, -apple-system, Roboto, sans-serif"
 
 // ---------------------------------------------------------------- shriftlar
 
-let fontsLink = false
-export function ensureFontsCss() {
-  if (fontsLink || typeof document === 'undefined') return
-  fontsLink = true
-  const l = document.createElement('link')
-  l.rel = 'stylesheet'
-  l.href = 'https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;800&family=Unbounded:wght@700&family=Manrope:wght@500;600&family=Playfair+Display:wght@700&family=Rubik:wght@500;600;800&display=swap'
-  document.head.appendChild(l)
+let fontsCss: Promise<void> | null = null
+/** Google Fonts CSS'ni bir marta ulaydi; @font-face'lar paydo bo'lgach hal bo'ladi (aks holda fonts.load bo'sh qaytadi). */
+export function ensureFontsCss(): Promise<void> {
+  if (typeof document === 'undefined') return Promise.resolve()
+  if (!fontsCss) {
+    fontsCss = new Promise(res => {
+      const l = document.createElement('link')
+      l.rel = 'stylesheet'
+      l.href = 'https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;800&family=Unbounded:wght@700&family=Manrope:wght@500;600&family=Playfair+Display:wght@700&family=Rubik:wght@500;600;800&display=swap'
+      l.onload = () => res()
+      l.onerror = () => res()
+      setTimeout(res, 5000)
+      document.head.appendChild(l)
+    })
+  }
+  return fontsCss
 }
 
 /** Kerakli shrift va harf to'plamini (kirill, lotin) yuklaydi; yuklanmasa ham chizish davom etadi. */
 export async function loadFonts(style: Style, sample: string) {
-  ensureFontsCss()
+  await ensureFontsCss()
   const f = FONTS[style.font] || FONTS.modern
   const text = sample.slice(0, 400) || 'Aa'
   await Promise.all([
