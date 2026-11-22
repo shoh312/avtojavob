@@ -646,6 +646,23 @@ def test_claude_models_and_usage(client, monkeypatch):
     creative = next(x for x in u["items"] if x["task"] == "creative")
     assert creative["model"] == "claude-sonnet-5-5" and creative["per_1000_usd"] == 12.0
 
+    # oylik xarajat chegarasi: oshganda adminlarga bir marta xabar
+    from app import plans
+    sent = []
+    monkeypatch.setattr(services, "telegram_send", lambda *a, **k: sent.append(a) or 1)
+    r = client.put("/api/admin/platform", json={"ai_alert_tjs": "0.01", "usd_tjs": "11"}, headers=H).json()
+    assert r["ai_alert_tjs"] == 0.01 and r["usd_tjs"] == 11.0
+    with SessionLocal() as db:
+        plans.set_setting(db, "ai_alert_sent", "")
+        services.ai_reply(db, "x", [{"role": "user", "content": "?"}])
+        assert plans.get_setting(db, "ai_alert_sent") == plans.month_start().strftime("%Y-%m")
+        n = len(sent)
+        services.ai_reply(db, "x", [{"role": "user", "content": "?"}])
+        assert len(sent) == n  # shu oy qayta yuborilmaydi
+    u = client.get("/api/admin/ai-usage").json()
+    assert u["month_tjs"] > 0 and u["alert_tjs"] == 0.01
+    client.put("/api/admin/platform", json={"ai_alert_tjs": "20"}, headers=H)
+
     # auto: avval Gemini; Gemini 503 bersa — Claude (Haiku) javob beradi
     r = client.put("/api/admin/platform", json={"ai_provider": "auto", "gemini_api_key": "AIza-test"}, headers=H).json()
     assert r["ai_provider"] == "auto"
@@ -1101,7 +1118,8 @@ def test_ai_content_assistant(client, monkeypatch):
     assert r["error"] == "ai_failed" and r["detail"].startswith("bad json") and len(tries) == 2  # bir marta qayta so'raladi
     monkeypatch.setattr(services, "ai_complete", lambda *a, **k: (None, "HTTP 429: quota"))
     assert client.post("/api/content/generate", json={"account_id": acc, "kind": "hooks", "topic": "t"}, headers=H).json()["detail"] == "HTTP 429: quota"
-    monkeypatch.setattr(content, "DAILY_LIMIT", 3)
+    import app.main as main_mod
+    monkeypatch.setattr(main_mod, "content_limit", lambda u: 3)
     assert client.post("/api/content/generate", json={"account_id": acc, "kind": "hooks", "topic": "t"}, headers=H).status_code == 429
 
     assert client.delete(f"/api/content/{cid}", headers=H).json()["ok"]

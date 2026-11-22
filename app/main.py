@@ -40,7 +40,8 @@ from .flows import (blank_graph, build_template, generate_system, list_templates
                     validate_graph)
 from .models import (LANGS, SEND_KINDS, ApiToken, Broadcast, Contact, EventLog, Flow, IGAccount, Message, NodeStat, Note,
                      AiUsage, ContentDraft, PlanGrant, Product, TeamTg, User, utcnow)
-from .plans import (PLANS, TRIAL_DAYS, accounts_limit, get_setting, is_active, plan_json, plans_public, products_limit,
+from .plans import (PLANS, TRIAL_DAYS, accounts_limit, content_limit, get_setting, is_active, plan_json, plans_public,
+                    products_limit,
                     usage_json,
                     set_setting)
 from .security import (decrypt, encrypt, hash_password, parse_signed_request, verify_password,
@@ -2098,10 +2099,14 @@ def content_list(account_id: int, user: User = Depends(current_user), db: Sessio
     acc = owned_account(db, user, account_id)
     rows = db.scalars(select(ContentDraft).where(ContentDraft.account_id == acc.id)
                       .order_by(ContentDraft.id.desc()).limit(60)).all()
-    used = db.scalar(select(func.count(ContentDraft.id)).where(
-        ContentDraft.account_id == acc.id, ContentDraft.created_at >= utcnow() - timedelta(days=1))) or 0
-    return {"items": [_draft_json(d) for d in rows], "used_today": used, "daily_limit": content.DAILY_LIMIT,
-            "ai_available": services.ai_available(db)}
+    return {"items": [_draft_json(d) for d in rows], "used_today": _content_used(db, acc),
+            "daily_limit": content_limit(acc.user), "ai_available": services.ai_available(db)}
+
+
+def _content_used(db: Session, acc: IGAccount) -> int:
+    """So'nggi 24 soatda ish maydonining barcha akkauntlarida yaratilgan kontent."""
+    return db.scalar(select(func.count(ContentDraft.id)).join(IGAccount, IGAccount.id == ContentDraft.account_id).where(
+        IGAccount.user_id == acc.user_id, ContentDraft.created_at >= utcnow() - timedelta(days=1))) or 0
 
 
 @app.post("/api/content/generate")
@@ -2119,9 +2124,8 @@ def content_generate(body: dict = Body(...), user: User = Depends(current_user),
     seconds = max(15, min(90, int(body.get("seconds") or 30)))
     if not services.ai_available(db):
         err("ai_unavailable")
-    used = db.scalar(select(func.count(ContentDraft.id)).where(
-        ContentDraft.account_id == acc.id, ContentDraft.created_at >= utcnow() - timedelta(days=1))) or 0
-    if used >= content.DAILY_LIMIT and not user.is_admin:
+    limit = content_limit(acc.user)
+    if limit is not None and _content_used(db, acc) >= limit:
         err("daily_limit", 429)
     products = catalog.active_products(db, acc.id)
     product, has_photo = "", False
@@ -2557,7 +2561,7 @@ def admin_set_password(user_id: int, body: dict = Body(...), admin: User = Depen
 
 
 PLAIN_SETTINGS = ("smtp_host", "smtp_port", "smtp_user", "smtp_from", "google_client_id", "ai_provider", "gemini_model",
-                  "claude_model", "claude_model_creative")
+                  "claude_model", "claude_model_creative", "ai_alert_tjs", "usd_tjs")
 
 
 def _platform_settings(db: Session) -> dict:
@@ -2572,6 +2576,7 @@ def _platform_settings(db: Session) -> dict:
     out["claude_model"] = services.claude_model(db, "chat")
     out["claude_model_creative"] = services.claude_model(db, "creative")
     out["claude_models"] = [{"id": k, "input": v[0], "output": v[1]} for k, v in services.CLAUDE_MODELS.items()]
+    out["ai_alert_tjs"], out["usd_tjs"] = services.spend_alert_config(db)
     return out
 
 
@@ -2615,7 +2620,10 @@ def admin_ai_usage(days: int = 30, admin: User = Depends(admin_user), db: Sessio
                       "avg_input": round(inp / n) if n else 0, "avg_output": round(out / n) if n else 0,
                       "per_1000_usd": round(cost / n * 1000, 3) if n else 0})
     items.sort(key=lambda x: -x["requests"])
-    return {"days": days, "items": items, "total_usd": round(sum(x["cost_usd"] for x in items), 4)}
+    alert, rate = services.spend_alert_config(db)
+    month = services.month_claude_usd(db)
+    return {"days": days, "items": items, "total_usd": round(sum(x["cost_usd"] for x in items), 4),
+            "month_usd": round(month, 4), "month_tjs": round(month * rate, 2), "alert_tjs": alert, "usd_tjs": rate}
 
 
 @app.post("/api/admin/platform/test-ai")

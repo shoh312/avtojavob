@@ -79,7 +79,7 @@ export default function Billing() {
               </div>
               {p.key === 'pro' && <p className="mt-2 flex items-center gap-1.5 text-[13px] font-medium text-emerald-700"><Gift className="h-4 w-4" />{cur.plan === 'trial' && cur.active ? t('banner.trial', { n: cur.days_left }) : t('bill.trial_d', { n: data.trial_days })}</p>}
               <ul className="mt-6 flex-1 space-y-3">
-                {[...FEATURES[p.key].map(f => t(f)), t('bill.f_ai', { n: p.ai_replies }), t('bill.f_products', { n: p.products })].map(f => (
+                {[...FEATURES[p.key].map(f => t(f)), t('bill.f_ai', { n: p.ai_replies }), t('bill.f_products', { n: p.products }), t('bill.f_content', { n: p.content_daily })].map(f => (
                   <li key={f} className="flex items-start gap-2.5 text-[14px]">
                     <Check className={`mt-0.5 h-4 w-4 shrink-0 ${p.key === 'business' ? 'text-brand-400' : 'text-brand-600'}`} />{f}
                   </li>

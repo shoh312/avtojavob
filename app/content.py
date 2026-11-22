@@ -16,7 +16,6 @@ GOALS = {
     "expert": "show expertise: teach something useful so people save and follow",
     "story": "tell a short relatable story (problem → turning point → result)",
 }
-DAILY_LIMIT = 40
 
 HOOK_RULES = """What a strong hook is (first 1-2 seconds / first slide):
 - Short: max ~12 words, spoken in under 2 seconds. Concrete, no greetings, no "in this video".

@@ -11,9 +11,9 @@ CURRENCY = "TJS"
 TRIAL_DAYS = 7
 # ai_replies — AI sotuvchining oylik javoblari (ish maydonidagi barcha akkauntlar uchun jami), products — har akkauntga
 PLANS = {
-    "trial": {"price": 0, "accounts": 1, "ai_replies": 1000, "products": 50},
-    "pro": {"price": 199, "accounts": 1, "ai_replies": 1000, "products": 50},
-    "business": {"price": 499, "accounts": 3, "ai_replies": 3000, "products": 150},
+    "trial": {"price": 0, "accounts": 1, "ai_replies": 1000, "products": 50, "content_daily": 10},
+    "pro": {"price": 199, "accounts": 1, "ai_replies": 1000, "products": 50, "content_daily": 10},
+    "business": {"price": 499, "accounts": 3, "ai_replies": 3000, "products": 150, "content_daily": 25},
 }
 ADMIN_PRODUCTS = 500
 ADMIN_ACCOUNTS = 10
@@ -49,6 +49,11 @@ def products_limit(user: User) -> int:
 def ai_limit(user: User) -> int | None:
     """Oylik AI javoblar limiti; None — cheklovsiz (admin)."""
     return None if user.is_admin else _plan(user)["ai_replies"]
+
+
+def content_limit(user: User) -> int | None:
+    """AI kontent: kuniga nechta yaratish (ish maydonining barcha akkauntlari uchun jami); None — cheklovsiz."""
+    return None if user.is_admin else _plan(user)["content_daily"]
 
 
 def month_start() -> datetime:
@@ -88,6 +93,7 @@ def plan_json(user: User) -> dict:
         "accounts_limit": accounts_limit(user),
         "ai_limit": ai_limit(user),
         "products_limit": products_limit(user),
+        "content_limit": content_limit(user),
         "unlimited": user.is_admin,
     }
 

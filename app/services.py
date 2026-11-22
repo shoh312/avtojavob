@@ -194,6 +194,62 @@ def record_usage(db: Session, provider: str, model: str, task: str, inp: int, ou
         db.commit()
     except Exception:  # noqa: BLE001 — hisob yozilmasa ham javob ketaversin
         db.rollback()
+        return
+    if provider == "claude":
+        check_spend_alert(db)
+
+
+def spend_alert_config(db: Session) -> tuple[float, float]:
+    """(chegara somonida, 1 USD necha somoni). Chegara 0 — ogohlantirish o'chiq."""
+    def num(key, default):
+        try:
+            return max(0.0, float((get_setting(db, key) or "").replace(",", ".") or default))
+        except ValueError:
+            return default
+    return num("ai_alert_tjs", 20.0), num("usd_tjs", 11.0) or 11.0
+
+
+def month_claude_usd(db: Session) -> float:
+    from sqlalchemy import func, select
+
+    from .models import AiUsage
+    from .plans import month_start
+    micro = db.scalar(select(func.sum(AiUsage.cost_micro)).where(
+        AiUsage.provider == "claude", AiUsage.created_at >= month_start())) or 0
+    return micro / 1_000_000
+
+
+def check_spend_alert(db: Session) -> None:
+    """Shu oy Claude xarajati chegaradan oshsa — adminlarga oyiga bir marta email va Telegram xabari."""
+    from sqlalchemy import select
+
+    from .models import IGAccount, User
+    from .plans import month_start
+    limit, rate = spend_alert_config(db)
+    if not limit:
+        return
+    month = month_start().strftime("%Y-%m")
+    if get_setting(db, "ai_alert_sent") == month:
+        return
+    usd = month_claude_usd(db)
+    if usd * rate < limit:
+        return
+    set_setting(db, "ai_alert_sent", month)
+    text = (f"⚠️ ChatFlow: shu oy Claude AI xarajati {usd * rate:.1f} somoni (${usd:.2f}) — "
+            f"{limit:g} somonilik chegaradan oshdi.\nAdmin → Platforma sozlamalari → AI bo'limida batafsil.")
+    log.warning("AI spend alert: $%.2f this month", usd)
+    admins = db.scalars(select(User).where(User.is_admin.is_(True))).all()
+    cfg = smtp_config(db)
+    for a in admins:
+        if cfg:
+            try:
+                send_email(cfg, a.email, "ChatFlow: AI xarajati chegaradan oshdi", text)
+            except Exception as e:  # noqa: BLE001
+                log.warning("spend alert email failed: %s", e)
+        acc = db.scalar(select(IGAccount).where(IGAccount.user_id == a.id, IGAccount.tg_bot_token_enc != "",
+                                                IGAccount.tg_chat_id != "").limit(1))
+        if acc:
+            telegram_send(acc.tg_bot_token_enc, acc.tg_chat_id, text)
 
 
 def _gemini(db: Session, system: str, history: list[dict], json_mode: bool = False,

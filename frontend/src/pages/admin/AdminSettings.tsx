@@ -10,17 +10,24 @@ type Platform = {
   google_client_id: string; google_redirect: string; ai_provider: 'gemini' | 'claude' | 'auto'; gemini_model: string
   smtp_password_set: boolean; google_client_secret_set: boolean; anthropic_api_key_set: boolean; gemini_api_key_set: boolean
   claude_model: string; claude_model_creative: string; claude_models: { id: string; input: number; output: number }[]
+  ai_alert_tjs: number; usd_tjs: number
 }
 type UsageRow = { provider: string; model: string; task: string; requests: number; avg_input: number; avg_output: number; cost_usd: number; per_1000_usd: number }
 
 /** AI xarajati: oxirgi 30 kun, model va vazifa bo'yicha; 1000 ta so'rovning o'rtacha narxi. */
 function AiUsage() {
   const { t } = useI18n()
-  const [u, setU] = useState<{ items: UsageRow[]; total_usd: number } | null>(null)
-  useEffect(() => { api.get<{ items: UsageRow[]; total_usd: number }>('/api/admin/ai-usage?days=30').then(setU).catch(() => {}) }, [])
+  type Usage = { items: UsageRow[]; total_usd: number; month_usd: number; month_tjs: number; alert_tjs: number }
+  const [u, setU] = useState<Usage | null>(null)
+  useEffect(() => { api.get<Usage>('/api/admin/ai-usage?days=30').then(setU).catch(() => {}) }, [])
   if (!u) return null
+  const over = u.alert_tjs > 0 && u.month_tjs >= u.alert_tjs
   return (
     <div className="rounded-xl border border-line">
+      <div className={`flex flex-wrap items-center justify-between gap-2 border-b border-line px-3.5 py-2.5 text-[13px] ${over ? 'bg-brand-50' : 'bg-soft/60'}`}>
+        <span>{t('adm.ai.month')}: <b className={over ? 'text-brand-700' : 'text-ink'}>{u.month_tjs.toFixed(2)} c.</b> <span className="text-ink-4">(${u.month_usd.toFixed(2)})</span></span>
+        <span className="text-ink-3">{u.alert_tjs > 0 ? t('adm.ai.alert_at', { n: u.alert_tjs }) : t('adm.ai.alert_off')}</span>
+      </div>
       <div className="flex items-center justify-between border-b border-line px-3.5 py-2.5 text-[13px]">
         <b>{t('adm.ai.usage')}</b><span className="text-ink-3">{t('adm.ai.total')}: <b className="text-ink">${u.total_usd.toFixed(2)}</b></span>
       </div>
@@ -84,7 +91,8 @@ export default function AdminSettings() {
     setForm({ smtp_host: r.smtp_host, smtp_port: r.smtp_port || '587', smtp_user: r.smtp_user, smtp_from: r.smtp_from,
       google_client_id: r.google_client_id, smtp_password: '', google_client_secret: '', anthropic_api_key: '',
       ai_provider: r.ai_provider, gemini_model: r.gemini_model, gemini_api_key: '',
-      claude_model: r.claude_model, claude_model_creative: r.claude_model_creative })
+      claude_model: r.claude_model, claude_model_creative: r.claude_model_creative,
+      ai_alert_tjs: String(r.ai_alert_tjs), usd_tjs: String(r.usd_tjs) })
   })
   useEffect(() => { load().catch(() => {}) }, [])
   if (!p) return <Spinner />
@@ -173,11 +181,16 @@ export default function AdminSettings() {
                 ))}
               </div>
               <p className="text-[12px] text-ink-4">{t('adm.ai.price_hint')}</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {input('ai_alert_tjs', t('adm.ai.alert'), '20')}
+                {input('usd_tjs', t('adm.ai.rate'), '11')}
+              </div>
+              <p className="text-[12px] text-ink-4">{t('adm.ai.alert_hint')}</p>
             </>
           )}
           <AiUsage />
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => save('ai', ['ai_provider', 'gemini_model', 'gemini_api_key', 'anthropic_api_key', 'claude_model', 'claude_model_creative'])} loading={busy === 'ai'}>{t('common.save')}</Button>
+            <Button onClick={() => save('ai', ['ai_provider', 'gemini_model', 'gemini_api_key', 'anthropic_api_key', 'claude_model', 'claude_model_creative', 'ai_alert_tjs', 'usd_tjs'])} loading={busy === 'ai'}>{t('common.save')}</Button>
             <Button variant="secondary" onClick={testAi} loading={busy === 'testai'} disabled={!(form.ai_provider === 'gemini' ? p.gemini_api_key_set : form.ai_provider === 'claude' ? p.anthropic_api_key_set : p.gemini_api_key_set || p.anthropic_api_key_set)}>{t('adm.pl.test_ai')}</Button>
           </div>
         </Section>

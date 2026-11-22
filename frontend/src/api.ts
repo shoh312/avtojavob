@@ -28,7 +28,7 @@ export type PlanKey = 'trial' | 'pro' | 'business'
 export type PlanInfo = { plan: PlanKey; active: boolean; expires_at: string; days_left: number; accounts_limit: number; unlimited: boolean; ai_limit?: number | null; products_limit?: number }
 export type User = { id: number; email: string; name: string; lang: string; is_admin: boolean; plan: PlanInfo; email_verified: boolean; role: 'owner' | 'manager'; avatar_url?: string; google?: boolean; created_at?: string; onboarding?: Onboarding | null; daily_report?: boolean }
 export type Onboarding = { pending?: boolean; biz?: string; goals?: string[]; about?: string }
-export type Plans = { currency: string; trial_days: number; telegram: string; plans: { key: PlanKey; price: number; accounts: number; ai_replies: number; products: number }[]; current: PlanInfo
+export type Plans = { currency: string; trial_days: number; telegram: string; plans: { key: PlanKey; price: number; accounts: number; ai_replies: number; products: number; content_daily: number }[]; current: PlanInfo
   usage?: { ai_used: number; ai_limit: number | null; products_limit: number } }
 export type SeriesPoint = { date: string; value: number }
 export type AdminUser = User & {

@@ -20,7 +20,7 @@ type Data = {
   caption?: string; hashtags?: string[]
 }
 type Draft = { id: number; kind: Kind; topic: string; title: string; created_at: string; data: Data; params: { goal?: Goal; lang?: Lang; slides?: number; seconds?: number; product_id?: number | null } }
-type ListResp = { items: Draft[]; used_today: number; daily_limit: number; ai_available: boolean }
+type ListResp = { items: Draft[]; used_today: number; daily_limit: number | null; ai_available: boolean }
 
 const KINDS: { k: Kind; icon: typeof Film; label: TKey; desc: TKey }[] = [
   { k: 'hooks', icon: Lightbulb, label: 'cnt.k.hooks', desc: 'cnt.k.hooks_d' },
@@ -414,7 +414,7 @@ export default function Content() {
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
-              <span className="text-[12px] text-ink-4">{list ? t('cnt.used', { n: list.used_today, max: list.daily_limit }) : ''}</span>
+              <span className="text-[12px] text-ink-4">{list ? t('cnt.used', { n: list.used_today, max: list.daily_limit ?? '∞' }) : ''}</span>
               <Button size="lg" loading={busy} disabled={list ? !list.ai_available : false} onClick={() => generate()}>
                 {!busy && <Wand2 className="h-4 w-4" />}{busy ? t('cnt.writing') : t('cnt.generate')}
               </Button>
