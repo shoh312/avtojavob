@@ -47,6 +47,17 @@ export default function Billing() {
             {cur.unlimited ? t('bill.unlimited') : cur.active ? `${t('bill.until', { d: date })} · ${t('adm.days_left', { n: cur.days_left })}` : t('banner.expired')}
           </div>
         </div>
+        {data.usage && data.usage.ai_limit != null && (
+          <div className="w-full sm:w-64">
+            <div className="flex justify-between text-[12.5px]"><span className="text-ink-3">{t('bill.usage_ai')}</span>
+              <b className="tabular-nums">{data.usage.ai_used} / {data.usage.ai_limit}</b></div>
+            <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-soft">
+              <div className={`h-full rounded-full ${data.usage.ai_used >= data.usage.ai_limit ? 'bg-brand-600' : data.usage.ai_used >= data.usage.ai_limit * 0.8 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                style={{ width: `${Math.min(100, (data.usage.ai_used / Math.max(1, data.usage.ai_limit)) * 100)}%` }} />
+            </div>
+            {data.usage.ai_used >= data.usage.ai_limit && <div className="mt-1 text-[12px] font-semibold text-brand-700">{t('bill.usage_over')}</div>}
+          </div>
+        )}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -68,9 +79,9 @@ export default function Billing() {
               </div>
               {p.key === 'trial' && <p className="mt-2 text-[13px] text-ink-3">{t('bill.trial_d', { n: data.trial_days })}</p>}
               <ul className="mt-6 flex-1 space-y-3">
-                {FEATURES[p.key].map(f => (
+                {[...FEATURES[p.key].map(f => t(f)), t('bill.f_ai', { n: p.ai_replies }), t('bill.f_products', { n: p.products })].map(f => (
                   <li key={f} className="flex items-start gap-2.5 text-[14px]">
-                    <Check className={`mt-0.5 h-4 w-4 shrink-0 ${p.key === 'business' ? 'text-brand-400' : 'text-brand-600'}`} />{t(f)}
+                    <Check className={`mt-0.5 h-4 w-4 shrink-0 ${p.key === 'business' ? 'text-brand-400' : 'text-brand-600'}`} />{f}
                   </li>
                 ))}
               </ul>

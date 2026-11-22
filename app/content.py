@@ -5,6 +5,7 @@ Hozircha Instagram statistikasi (insights) ishlatilmaydi — buning uchun alohid
 """
 
 import json
+import re
 
 from .catalog import LANG_NAMES
 
@@ -56,6 +57,8 @@ FONTS = {
     "playful": "Rubik rounded — friendly, kids, food",
 }
 DECORS = ("blobs", "grid", "lines", "none")
+BGS = ("gradient", "solid", "glow", "split", "mesh", "photo")
+BG_IMAGE = re.compile(r"^(https?://[^\s\"'<>]+)?/uploads/[\w.-]+$")
 LAYOUTS = ("cover", "text", "list", "steps", "number", "quote", "compare", "photo", "cta")
 
 
@@ -109,7 +112,9 @@ Overall style — pick what fits this business, niche and mood:
 - "font", one of:
 {fonts}
 - "decor", one of: "blobs" (soft circles), "grid" (dot grid), "lines" (diagonal stripes), "none".
-JSON: {{"title": "...", "style": {{"palette": "...", "font": "...", "decor": "..."}},
+- "bg" (background), one of: "gradient" (smooth two-tone), "solid" (flat, minimal), "glow" (dark with a light glow),
+  "split" (diagonal two-color split), "mesh" (soft blurred color spots, trendy).
+JSON: {{"title": "...", "style": {{"palette": "...", "font": "...", "decor": "...", "bg": "..."}},
 "slides": [{{"layout": "...", "title": "...", "body": "...", "items": ["..."], "big": "...", "highlight": "...", "emoji": "..."}}],
 "caption": "...", "hashtags": ["#..."]}}"""
 
@@ -211,6 +216,13 @@ def normalize(kind: str, data: dict, slides: int = 7) -> dict:
     st = data.get("style") if isinstance(data.get("style"), dict) else {}
     style = {"palette": st.get("palette") if st.get("palette") in PALETTES else "brand",
              "font": st.get("font") if st.get("font") in FONTS else "modern",
-             "decor": st.get("decor") if st.get("decor") in DECORS else "blobs"}
+             "decor": st.get("decor") if st.get("decor") in DECORS else "blobs",
+             "bg": st.get("bg") if st.get("bg") in BGS else "gradient"}
+    img = str(st.get("bg_image") or "")
+    if style["bg"] == "photo":
+        if BG_IMAGE.match(img):  # faqat serverimizdagi yuklangan rasm
+            style["bg_image"] = img
+        else:
+            style["bg"] = "gradient"
     return {"title": title, "style": style, "slides": out, "caption": _s(data.get("caption"), 2200),
             "hashtags": _tags(data.get("hashtags"))}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { BellRing, Bot, FlaskConical, Handshake, KanbanSquare, Loader2, RotateCcw, Send, Settings2, ShoppingBag, StickyNote, UserPlus } from 'lucide-react'
-import { api, ApiError } from '../api'
+import { api, ApiError, type Plans } from '../api'
 import { useI18n, type TKey } from '../i18n'
 import { Button, Toggle } from '../components/ui'
 
@@ -116,6 +116,8 @@ export function AiSalesPanel({ accountId, s, save, onDirty }: {
   const dirty = name !== s.ai_name || prompt !== s.ai_prompt
   useEffect(() => { onDirty(dirty ? { name, prompt } : null) }, [dirty, name, prompt, onDirty])
 
+  const [usage, setUsage] = useState<{ ai_used: number; ai_limit: number | null } | null>(null)
+  useEffect(() => { api.get<Plans>('/api/plans').then(r => setUsage(r.usage || null)).catch(() => {}) }, [])
   const flow: TKey[] = ['ai3.f1', 'ai3.f2', 'ai3.f3', ...(s.ai_collect_leads ? ['ai3.f4' as TKey] : []), ...(s.ai_handoff ? ['ai3.f5' as TKey] : [])]
 
   return (
@@ -134,6 +136,11 @@ export function AiSalesPanel({ accountId, s, save, onDirty }: {
           </div>
           <Toggle checked={s.ai_enabled} onChange={v => save({ ai_enabled: v })} />
         </div>
+        {usage && usage.ai_limit != null && (
+          <div className={`relative mt-3 text-[12px] font-semibold ${usage.ai_used >= usage.ai_limit ? 'text-amber-400' : s.ai_enabled ? 'text-white/60' : 'text-ink-3'}`}>
+            {t('ai3.quota', { n: usage.ai_used, max: usage.ai_limit })}{usage.ai_used >= usage.ai_limit ? ` · ${t('bill.usage_over')}` : ''}
+          </div>
+        )}
         {/* qanday ishlaydi */}
         <div className="relative mt-4 flex flex-wrap items-center gap-1.5">
           {flow.map((k, i) => (

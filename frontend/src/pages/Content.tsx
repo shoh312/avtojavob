@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Clapperboard, Copy, Download, Film, GalleryHorizontalEnd, Lightbulb, Loader2, Sparkles, Trash2, Wand2 } from 'lucide-react'
+import { Check, Clapperboard, Image as ImageIcon, Upload, Copy, Download, Film, GalleryHorizontalEnd, Lightbulb, Loader2, Sparkles, Trash2, Wand2 } from 'lucide-react'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth'
 import { LANGS, useI18n, useTimeAgo, type Lang, type TKey } from '../i18n'
 import { Button, Empty, PageHeader, useToast } from '../components/ui'
 import { Onboarding } from './Home'
-import { DECORS, DEFAULT_STYLE, FONTS, LAYOUTS, PALETTES, H, W, drawSlide, layoutOf, loadFonts, loadImage, type Slide, type Style } from './carousel'
+import { uploadImage } from './Products'
+import { BGS, DECORS, DEFAULT_STYLE, FONTS, LAYOUTS, PALETTES, H, W, drawSlide, layoutOf, loadFonts, loadImage, type Slide, type Style } from './carousel'
 
 type Kind = 'hooks' | 'reels' | 'carousel'
 type Goal = 'sell' | 'engage' | 'expert' | 'story'
@@ -176,8 +177,9 @@ function SlideCanvas({ s, i, total, style, handle, photo, register }: { s: Slide
     let live = true
     const sample = [s.title, s.body, ...(s.items || []), s.big || ''].join(' ')
     const img = layoutOf(s, i, total) === 'photo' && photo ? loadImage(photo) : Promise.resolve(null)
+    const bgImg = style.bg === 'photo' && style.bg_image ? loadImage(style.bg_image) : Promise.resolve(null)
     drawSlide(el, s, i, total, style, handle, null)
-    Promise.all([loadFonts(style, sample), img]).then(([, im]) => { if (live) drawSlide(el, s, i, total, style, handle, im) })
+    Promise.all([loadFonts(style, sample), img, bgImg]).then(([, im, bi]) => { if (live) drawSlide(el, s, i, total, style, handle, im, bi) })
     return () => { live = false }
   }, [s, i, total, style, handle, photo])
   useEffect(() => { register(i, ref.current); return () => register(i, null) }, [i, register])
@@ -220,6 +222,13 @@ function CarouselView({ draft, photo, onSaved }: { draft: Draft; photo: string; 
       await new Promise(r => setTimeout(r, 350))
     }
   }
+  const [uploading, setUploading] = useState(false)
+  const upload = async (file: File) => {
+    setUploading(true)
+    try { const r = await uploadImage(file); setStyle(s => ({ ...s, bg: 'photo', bg_image: r.image_url })) }
+    catch (e) { toast(e instanceof ApiError && e.code === 'image_too_large' ? t('err.image_too_large') : t('common.error'), 'error') }
+    finally { setUploading(false) }
+  }
   const chip = (on: boolean) => `rounded-lg border px-2.5 py-1 text-[12px] font-semibold ${on ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-line hover:bg-soft'}`
   return (
     <div className="space-y-4">
@@ -235,6 +244,16 @@ function CarouselView({ draft, photo, onSaved }: { draft: Draft; photo: string; 
           {Object.entries(FONTS).map(([k, f]) => <button key={k} onClick={() => setStyle(s => ({ ...s, font: k }))} className={chip(style.font === k)} style={{ fontFamily: f.head }}>{f.label}</button>)}
           <span className="mx-1 h-5 w-px bg-line" />
           {DECORS.map(k => <button key={k} onClick={() => setStyle(s => ({ ...s, decor: k }))} className={chip(style.decor === k)}>{k}</button>)}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-[12px] font-semibold text-ink-3">{t('cnt.bg')}</span>
+          {BGS.map(k => <button key={k} onClick={() => setStyle(s => ({ ...s, bg: k }))} className={chip((style.bg || 'gradient') === k)}>{t(`cnt.bg_${k}` as TKey)}</button>)}
+          {photo && <button onClick={() => setStyle(s => ({ ...s, bg: 'photo', bg_image: photo }))} className={chip(style.bg === 'photo' && style.bg_image === photo)}><ImageIcon className="mr-1 inline h-3.5 w-3.5" />{t('cnt.bg_product')}</button>}
+          {style.bg === 'photo' && style.bg_image && style.bg_image !== photo && <span className={chip(true)}><ImageIcon className="mr-1 inline h-3.5 w-3.5" />{t('cnt.bg_photo')}</span>}
+          <label className={`${chip(false)} cursor-pointer`}>
+            {uploading ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <Upload className="mr-1 inline h-3.5 w-3.5" />}{t('cnt.bg_upload')}
+            <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) upload(f) }} />
+          </label>
           <div className="ml-auto flex gap-2">
             {dirty && <Button size="sm" variant="secondary" loading={saving} onClick={save}>{t('common.save')}</Button>}
             <Button size="sm" onClick={all}><Download className="h-4 w-4" />{t('cnt.download_all')}</Button>

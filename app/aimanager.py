@@ -241,6 +241,22 @@ def handoff(db: Session, cfg: Cfg, account: IGAccount, contact: Contact, reason:
     notify_telegram(db, account, contact_card(contact, f"🤝 {cfg.name or 'AI'}: {reason[:300]}"), contact, target.id)
 
 
+def quota_ok(db: Session, account: IGAccount) -> bool:
+    """Tarifning oylik AI javoblar limiti. Tugasa — egasiga oyiga bir marta Telegram orqali xabar."""
+    from .engine import notify_telegram
+    from .plans import ai_limit, ai_quota_left, get_setting, month_start, set_setting
+
+    if ai_quota_left(db, account):
+        return True
+    owner = account.user
+    key, month = f"ai_quota_note:{owner.id}", month_start().strftime("%Y-%m")
+    if get_setting(db, key) != month:
+        set_setting(db, key, month)
+        notify_telegram(db, account, f"⚠️ AI: {ai_limit(owner)} javoblik oylik limit tugadi. "
+                                     "AI sotuvchi keyingi oygacha javob bermaydi — tarifni oshiring.")
+    return False
+
+
 def reply(db: Session, account: IGAccount, contact: Contact, text: str, hint: str | None = None) -> bool:
     """Kiruvchi xabarga AI sotuvchi javobi. True — javob yuborildi."""
     from .engine import log_event, sends_last_hour
@@ -250,6 +266,9 @@ def reply(db: Session, account: IGAccount, contact: Contact, text: str, hint: st
         return False
     if sends_last_hour(db, account.id) >= settings.HOURLY_SEND_LIMIT:
         log_event(db, account, contact, "skipped", text, "limit")
+        return False
+    if not quota_ok(db, account):
+        log_event(db, account, contact, "skipped", text, "ai_quota")
         return False
     cfg = cfg_of(account)
     data = _ask(db, cfg, account, contact, followup=False, hint=hint)
@@ -311,6 +330,8 @@ def run_followups() -> int:
                     continue
                 if not services.ai_available(db):
                     return sent
+                if not quota_ok(db, account):
+                    break
                 c.ai_followup_at = now  # bir marta
                 db.commit()
                 data = _ask(db, cfg, account, c, followup=True)

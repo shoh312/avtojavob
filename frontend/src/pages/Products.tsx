@@ -91,6 +91,7 @@ function PostPicker({ accountId, onPick, onClose }: { accountId: number; onPick:
 
 function ProductModal({ product, accountId, onClose, onSaved }: { product: Product | null; accountId: number; onClose: () => void; onSaved: () => void }) {
   const { t } = useI18n()
+  const { me } = useAuth()
   const toast = useToast()
   const [f, setF] = useState({
     name: product?.name ?? '', price: product?.price ?? '', description: product?.description ?? '',
@@ -129,7 +130,9 @@ function ProductModal({ product, accountId, onClose, onSaved }: { product: Produ
       onSaved()
       onClose()
     } catch (e) {
-      toast(e instanceof ApiError && ['product_name', 'button_url'].includes(e.code) ? t((e.code === 'button_url' ? 've.button_url' : 'err.product_name') as TKey) : t('common.error'), 'error')
+      const code = e instanceof ApiError ? e.code : ''
+      toast(code === 'too_many' ? t('err.products_limit', { n: me?.user.plan.products_limit ?? '' })
+        : ['product_name', 'button_url'].includes(code) ? t((code === 'button_url' ? 've.button_url' : 'err.product_name') as TKey) : t('common.error'), 'error')
     } finally { setBusy(false) }
   }
 

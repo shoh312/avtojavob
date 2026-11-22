@@ -40,7 +40,8 @@ from .flows import (blank_graph, build_template, generate_system, list_templates
                     validate_graph)
 from .models import (LANGS, SEND_KINDS, ApiToken, Broadcast, Contact, EventLog, Flow, IGAccount, Message, NodeStat, Note,
                      ContentDraft, PlanGrant, Product, TeamTg, User, utcnow)
-from .plans import (PLANS, TRIAL_DAYS, accounts_limit, get_setting, is_active, plan_json, plans_public,
+from .plans import (PLANS, TRIAL_DAYS, accounts_limit, get_setting, is_active, plan_json, plans_public, products_limit,
+                    usage_json,
                     set_setting)
 from .security import (decrypt, encrypt, hash_password, parse_signed_request, verify_password,
                        verify_webhook_signature)
@@ -329,7 +330,7 @@ def plans_open(db: Session = Depends(get_db)):
 
 @app.get("/api/plans")
 def plans(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return {**plans_public(db), "current": plan_json(user.workspace)}
+    return {**plans_public(db), "current": plan_json(user.workspace), "usage": usage_json(db, user.workspace)}
 
 
 @app.patch("/api/me")
@@ -1834,7 +1835,7 @@ def products_reorder(body: dict = Body(...), user: User = Depends(current_user),
 @app.post("/api/products")
 def product_create(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
     acc = owned_account(db, user, int(body.get("account_id") or 0))
-    if db.scalar(select(func.count(Product.id)).where(Product.account_id == acc.id)) >= 100:
+    if db.scalar(select(func.count(Product.id)).where(Product.account_id == acc.id)) >= products_limit(acc.user):
         err("too_many")
     p = Product(account_id=acc.id, name="")
     _apply_product(p, {"name": body.get("name"), **body})

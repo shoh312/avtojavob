@@ -1,7 +1,7 @@
 /** Karusel slaydlarini canvas'da chizish. AI dizaynni tanlaydi (layout, palitra, shrift, bezak) — chizish shu yerda. */
 
 export type Slide = { layout?: string; title: string; body: string; items?: string[]; big?: string; highlight?: string; emoji?: string }
-export type Style = { palette: string; font: string; decor: string }
+export type Style = { palette: string; font: string; decor: string; bg?: string; bg_image?: string }
 
 type Pal = { bg: [string, string]; text: string; body: string; accent: string; onAccent: string; muted: string; card: string; mark?: string }
 export const PALETTES: Record<string, Pal> = {
@@ -21,8 +21,9 @@ export const FONTS: Record<string, { label: string; head: string; headW: number;
   playful: { label: 'Rubik', head: 'Rubik', headW: 800, body: 'Rubik', bodyW: 500 },
 }
 export const DECORS = ['blobs', 'grid', 'lines', 'none'] as const
+export const BGS = ['gradient', 'solid', 'glow', 'split', 'mesh'] as const
 export const LAYOUTS = ['cover', 'text', 'list', 'steps', 'number', 'quote', 'compare', 'photo', 'cta'] as const
-export const DEFAULT_STYLE: Style = { palette: 'brand', font: 'modern', decor: 'blobs' }
+export const DEFAULT_STYLE: Style = { palette: 'brand', font: 'modern', decor: 'blobs', bg: 'gradient' }
 
 export const W = 1080, H = 1350
 const PAD = 96, CW = W - PAD * 2, TOP = 190, BOTTOM = H - 190
@@ -143,11 +144,61 @@ function rrect(ctx: Ctx, x: number, y: number, w: number, h: number, r: number) 
 
 // ---------------------------------------------------------------- fon va bezak
 
-function background(ctx: Ctx, pal: Pal, decor: string, i: number) {
-  const g = ctx.createLinearGradient(0, 0, W * 0.6, H)
-  g.addColorStop(0, pal.bg[0]); g.addColorStop(1, pal.bg[1])
+function radial(ctx: Ctx, x: number, y: number, r: number, color: string, alpha: number) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r)
+  ctx.save()
+  ctx.globalAlpha = alpha
+  g.addColorStop(0, color); g.addColorStop(1, 'rgba(0,0,0,0)')
   ctx.fillStyle = g
   ctx.fillRect(0, 0, W, H)
+  ctx.restore()
+}
+
+/** Orqa fon turi: gradient | solid | glow | split | mesh; rasm bo'lsa — rasm + palitra rangidagi parda. */
+function fill(ctx: Ctx, pal: Pal, bg: string, i: number, photo: HTMLImageElement | null) {
+  if (photo) {
+    const r = Math.max(W / photo.width, H / photo.height)
+    const sw = W / r, sh = H / r
+    ctx.drawImage(photo, (photo.width - sw) / 2, (photo.height - sh) / 2, sw, sh, 0, 0, W, H)
+    const g = ctx.createLinearGradient(0, 0, 0, H)
+    g.addColorStop(0, pal.bg[1]); g.addColorStop(1, pal.bg[0])
+    ctx.save(); ctx.globalAlpha = 0.78; ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); ctx.restore()
+    return
+  }
+  if (bg === 'solid') {
+    ctx.fillStyle = pal.bg[0]
+    ctx.fillRect(0, 0, W, H)
+  } else if (bg === 'glow') {
+    ctx.fillStyle = pal.bg[1]
+    ctx.fillRect(0, 0, W, H)
+    const flip = i % 2 === 1
+    radial(ctx, flip ? W * 0.15 : W * 0.85, H * 0.12, 820, pal.accent, 0.5)
+    radial(ctx, flip ? W * 0.9 : W * 0.1, H * 0.95, 700, pal.bg[0], 0.9)
+  } else if (bg === 'split') {
+    ctx.fillStyle = pal.bg[0]
+    ctx.fillRect(0, 0, W, H)
+    ctx.fillStyle = pal.bg[1]
+    const a = i % 2 ? H * 0.62 : H * 0.72, b = i % 2 ? H * 0.78 : H * 0.56
+    ctx.beginPath(); ctx.moveTo(0, a); ctx.lineTo(W, b); ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath(); ctx.fill()
+    ctx.fillStyle = pal.accent  // urg'u chizig'i faqat pastki chetda — matn ustidan o'tmaydi
+    ctx.fillRect(0, H - 14, W, 14)
+  } else if (bg === 'mesh') {
+    ctx.fillStyle = pal.bg[0]
+    ctx.fillRect(0, 0, W, H)
+    const k = i % 3
+    radial(ctx, W * [0.1, 0.9, 0.5][k], H * [0.2, 0.3, 0.1][k], 820, pal.bg[1], 0.95)
+    radial(ctx, W * [0.95, 0.15, 0.85][k], H * [0.85, 0.9, 0.75][k], 700, pal.accent, 0.3)
+    radial(ctx, W * 0.5, H * 0.55, 600, pal.bg[0], 0.5)
+  } else {
+    const g = ctx.createLinearGradient(0, 0, W * 0.6, H)
+    g.addColorStop(0, pal.bg[0]); g.addColorStop(1, pal.bg[1])
+    ctx.fillStyle = g
+    ctx.fillRect(0, 0, W, H)
+  }
+}
+
+function background(ctx: Ctx, pal: Pal, decor: string, i: number, bg: string, photo: HTMLImageElement | null) {
+  fill(ctx, pal, bg, i, photo)
   ctx.save()
   if (decor === 'blobs') {
     ctx.fillStyle = pal.accent
@@ -372,7 +423,7 @@ export function layoutOf(s: Slide, i: number, total: number) {
   return i === 0 ? 'cover' : i === total - 1 ? 'cta' : (s.items?.length || 0) >= 2 ? 'list' : 'text'
 }
 
-export function drawSlide(cv: HTMLCanvasElement, s: Slide, i: number, total: number, style: Style, handle: string, img: HTMLImageElement | null) {
+export function drawSlide(cv: HTMLCanvasElement, s: Slide, i: number, total: number, style: Style, handle: string, img: HTMLImageElement | null, bgImg: HTMLImageElement | null = null) {
   const ctx = cv.getContext('2d')
   if (!ctx) return
   cv.width = W; cv.height = H
@@ -380,7 +431,7 @@ export function drawSlide(cv: HTMLCanvasElement, s: Slide, i: number, total: num
   const font = FONTS[style.font] || FONTS.modern
   const e: Env = { ctx, pal, head: { f: font.head, w: font.headW }, body: { f: font.body, w: font.bodyW }, img,
     hl: new Set((s.highlight || '').split(/\s+/).map(norm).filter(Boolean)) }
-  background(ctx, pal, style.decor, i)
+  background(ctx, pal, style.decor, i, style.bg || 'gradient', bgImg)
   const block = BLOCKS[layoutOf(s, i, total)]
   const h = block(e, s, TOP, false)
   const y = Math.max(TOP, TOP + (BOTTOM - TOP - h) / 2)

@@ -16,6 +16,7 @@ os.environ.update({"DATABASE_URL": _TEST_DB, "IG_APP_ID": "123", "IG_APP_SECRET"
                    "WEBHOOK_VERIFY_TOKEN": "verify-me", "SECRET_KEY": "test"})
 
 import pytest  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import instagram as ig  # noqa: E402
@@ -1027,6 +1028,38 @@ def test_ai_content_assistant(client, monkeypatch):
 
     assert client.delete(f"/api/content/{cid}", headers=H).json()["ok"]
     assert len(client.get(f"/api/content?account_id={acc}").json()["items"]) == 2
+
+
+def test_plan_limits(client, monkeypatch):
+    from app import aimanager, plans, services
+    from app.models import EventLog
+    acc = S["acc"]
+    monkeypatch.setattr(services, "ai_available", lambda db: True)
+    with SessionLocal() as db:
+        a = db.get(IGAccount, acc)
+        owner = a.user
+        assert plans.products_limit(owner) in (50, 150, plans.ADMIN_PRODUCTS)
+        monkeypatch.setitem(plans.PLANS, owner.plan if owner.plan in plans.PLANS else "trial",
+                            {**plans._plan(owner), "ai_replies": 2, "products": 0})
+        monkeypatch.setattr(owner, "is_admin", False)
+        used = plans.ai_used(db, owner.id)
+        for _ in range(max(0, 2 - used)):
+            db.add(EventLog(account_id=acc, kind="ai_reply", detail="x"))
+        db.commit()
+        assert not plans.ai_quota_left(db, a)
+        sent = []
+        monkeypatch.setattr(services, "_tg", lambda token, method, **p: sent.append(p) or {"message_id": 1})
+        a.ai_enabled = True
+        c = db.scalar(select(Contact).where(Contact.account_id == acc).limit(1))
+        monkeypatch.setattr(aimanager, "_ask", lambda *a, **k: pytest.fail("AI must not be called over quota"))
+        assert aimanager.reply(db, a, c, "salom") is False
+        assert aimanager.reply(db, a, c, "salom") is False
+        assert plans.get_setting(db, f"ai_quota_note:{owner.id}") == plans.month_start().strftime("%Y-%m")
+        u = plans.usage_json(db, owner)
+        assert u["ai_limit"] == 2 and u["ai_used"] >= 2
+    if not client.get("/api/me").json()["user"]["is_admin"]:
+        r = client.post("/api/products", json={"account_id": acc, "name": "Limitdan tashqari"}, headers=H)
+        assert r.status_code == 400 and r.json()["error"] == "too_many"
 
 
 def test_ai_sales(client, monkeypatch):
