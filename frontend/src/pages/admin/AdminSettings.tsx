@@ -9,6 +9,44 @@ type Platform = {
   telegram_username: string; smtp_host: string; smtp_port: string; smtp_user: string; smtp_from: string
   google_client_id: string; google_redirect: string; ai_provider: 'gemini' | 'claude'; gemini_model: string
   smtp_password_set: boolean; google_client_secret_set: boolean; anthropic_api_key_set: boolean; gemini_api_key_set: boolean
+  claude_model: string; claude_model_creative: string; claude_models: { id: string; input: number; output: number }[]
+}
+type UsageRow = { provider: string; model: string; task: string; requests: number; avg_input: number; avg_output: number; cost_usd: number; per_1000_usd: number }
+
+/** AI xarajati: oxirgi 30 kun, model va vazifa bo'yicha; 1000 ta so'rovning o'rtacha narxi. */
+function AiUsage() {
+  const { t } = useI18n()
+  const [u, setU] = useState<{ items: UsageRow[]; total_usd: number } | null>(null)
+  useEffect(() => { api.get<{ items: UsageRow[]; total_usd: number }>('/api/admin/ai-usage?days=30').then(setU).catch(() => {}) }, [])
+  if (!u) return null
+  return (
+    <div className="rounded-xl border border-line">
+      <div className="flex items-center justify-between border-b border-line px-3.5 py-2.5 text-[13px]">
+        <b>{t('adm.ai.usage')}</b><span className="text-ink-3">{t('adm.ai.total')}: <b className="text-ink">${u.total_usd.toFixed(2)}</b></span>
+      </div>
+      {!u.items.length ? <div className="px-3.5 py-4 text-[13px] text-ink-4">{t('adm.ai.none')}</div> : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12.5px]">
+            <thead className="text-left text-ink-4"><tr>
+              <th className="px-3.5 py-2 font-semibold">{t('adm.ai.model')}</th><th className="px-2 py-2 font-semibold">{t('adm.ai.requests')}</th>
+              <th className="px-2 py-2 font-semibold">{t('adm.ai.tokens')}</th><th className="px-2 py-2 font-semibold">{t('adm.ai.spent')}</th>
+              <th className="px-3.5 py-2 text-right font-semibold">{t('adm.ai.per1000')}</th></tr></thead>
+            <tbody className="divide-y divide-line">
+              {u.items.map(r => (
+                <tr key={`${r.provider}${r.model}${r.task}`}>
+                  <td className="px-3.5 py-2"><div className="font-semibold">{r.model}</div><div className="text-ink-4">{t(r.task === 'creative' ? 'adm.ai.task_creative' : 'adm.ai.task_chat')}</div></td>
+                  <td className="px-2 py-2 tabular-nums">{r.requests}</td>
+                  <td className="px-2 py-2 tabular-nums text-ink-3">{r.avg_input} / {r.avg_output}</td>
+                  <td className="px-2 py-2 tabular-nums">{r.provider === 'gemini' ? '—' : `$${r.cost_usd.toFixed(3)}`}</td>
+                  <td className="px-3.5 py-2 text-right font-bold tabular-nums">{r.provider === 'gemini' ? t('adm.ai.free') : `$${r.per_1000_usd.toFixed(2)}`}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function Section({ icon, title, hint, children }: { icon: ReactNode; title: string; hint?: ReactNode; children: ReactNode }) {
@@ -45,7 +83,8 @@ export default function AdminSettings() {
     setTg(r.telegram_username)
     setForm({ smtp_host: r.smtp_host, smtp_port: r.smtp_port || '587', smtp_user: r.smtp_user, smtp_from: r.smtp_from,
       google_client_id: r.google_client_id, smtp_password: '', google_client_secret: '', anthropic_api_key: '',
-      ai_provider: r.ai_provider, gemini_model: r.gemini_model, gemini_api_key: '' })
+      ai_provider: r.ai_provider, gemini_model: r.gemini_model, gemini_api_key: '',
+      claude_model: r.claude_model, claude_model_creative: r.claude_model_creative })
   })
   useEffect(() => { load().catch(() => {}) }, [])
   if (!p) return <Spinner />
@@ -122,10 +161,21 @@ export default function AdminSettings() {
             <>
               <p className="text-[13px] leading-relaxed text-ink-3">{t('adm.pl.ai_hint')}</p>
               <Secret label={t('adm.pl.key')} isSet={p.anthropic_api_key_set} value={form.anthropic_api_key} onChange={set('anthropic_api_key')} />
+              <div className="grid gap-3 sm:grid-cols-2">
+                {(['claude_model', 'claude_model_creative'] as const).map(k => (
+                  <label key={k} className="block"><span className="label">{t(k === 'claude_model' ? 'adm.ai.model_chat' : 'adm.ai.model_creative')}</span>
+                    <select className="input" value={form[k] ?? ''} onChange={e => set(k)(e.target.value)}>
+                      {p.claude_models.map(m => <option key={m.id} value={m.id}>{m.id} · ${m.input} / ${m.output}</option>)}
+                    </select>
+                  </label>
+                ))}
+              </div>
+              <p className="text-[12px] text-ink-4">{t('adm.ai.price_hint')}</p>
             </>
           )}
+          <AiUsage />
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => save('ai', ['ai_provider', 'gemini_model', 'gemini_api_key', 'anthropic_api_key'])} loading={busy === 'ai'}>{t('common.save')}</Button>
+            <Button onClick={() => save('ai', ['ai_provider', 'gemini_model', 'gemini_api_key', 'anthropic_api_key', 'claude_model', 'claude_model_creative'])} loading={busy === 'ai'}>{t('common.save')}</Button>
             <Button variant="secondary" onClick={testAi} loading={busy === 'testai'} disabled={!(form.ai_provider === 'gemini' ? p.gemini_api_key_set : p.anthropic_api_key_set)}>{t('adm.pl.test_ai')}</Button>
           </div>
         </Section>

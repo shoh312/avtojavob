@@ -437,3 +437,18 @@ class ContentDraft(Base):
     params_json: Mapped[str] = mapped_column(Text, default="{}")
     data_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class AiUsage(Base):
+    """Har bir AI so'rovining token sarfi va taxminiy narxi (admin hisoboti uchun)."""
+
+    __tablename__ = "ai_usage"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(12))
+    model: Mapped[str] = mapped_column(String(60))
+    task: Mapped[str] = mapped_column(String(12), default="chat")  # chat | creative
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_micro: Mapped[int] = mapped_column(Integer, default=0)  # millionlik dollar (1 = $0.000001)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

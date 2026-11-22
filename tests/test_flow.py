@@ -613,6 +613,40 @@ def test_gemini_provider(client, monkeypatch):
     assert len(urls) == 2
 
 
+def test_claude_models_and_usage(client, monkeypatch):
+    from types import SimpleNamespace
+    from app import services
+    _login(client, "boss@chatflow.tj")
+    r = client.put("/api/admin/platform", json={"ai_provider": "claude", "anthropic_api_key": "sk-ant-test"}, headers=H).json()
+    assert r["claude_model"] == "claude-haiku-5-5" and r["claude_model_creative"] == "claude-sonnet-5-5"
+    assert client.put("/api/admin/platform", json={"claude_model": "gpt-9"}, headers=H).json()["error"] == "bad_model"
+    calls = []
+
+    class Fake:
+        def __init__(self, **kw):
+            self.messages = SimpleNamespace(create=self._create)
+            self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
+
+        def _create(self, **kw):
+            calls.append(kw)
+            return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text="Salom!")],
+                                   usage=SimpleNamespace(input_tokens=4000, output_tokens=400))
+    monkeypatch.setattr(services.anthropic, "Anthropic", Fake)
+    with SessionLocal() as db:
+        assert services.ai_reply(db, "x", [{"role": "user", "content": "?"}]) == "Salom!"
+        services.ai_complete(db, "s", "t", task="creative")
+    assert calls[0]["model"] == "claude-haiku-5-5" and "fallbacks" not in calls[0]
+    assert calls[0]["output_config"] == {"effort": "low"}
+    assert calls[1]["model"] == "claude-sonnet-5-5" and calls[1]["fallbacks"] == "default"
+    u = client.get("/api/admin/ai-usage").json()
+    chat = next(x for x in u["items"] if x["task"] == "chat" and x["provider"] == "claude")
+    # 4000 kirish * $0.10/M + 400 chiqish * $0.50/M = $0.0006 -> 1000 ta javob ~ $0.60
+    assert chat["avg_input"] == 4000 and chat["per_1000_usd"] == 0.6
+    creative = next(x for x in u["items"] if x["task"] == "creative")
+    assert creative["model"] == "claude-sonnet-5-5" and creative["per_1000_usd"] == 12.0
+    client.put("/api/admin/platform", json={"ai_provider": "gemini"}, headers=H)
+
+
 def test_crm_pipeline(client):
     _login(client, "a@b.tj", "newpass123")
     acc = S["acc"]
@@ -968,7 +1002,7 @@ def test_ai_generate_flow(client, monkeypatch):
                   {"source": "m", "target": "q", "sourceHandle": "btn:go"},
                   {"source": "q", "target": "a"}, {"source": "a", "target": "t"}]}
 
-    def fake_complete(db, system, text, json_mode=False, max_tokens=8000):
+    def fake_complete(db, system, text, json_mode=False, max_tokens=8000, task="chat"):
         seen.update(system=system, text=text, json_mode=json_mode)
         return "```json\n" + json.dumps(ai_json) + "\n```", None
     monkeypatch.setattr(services, "ai_complete", fake_complete)
@@ -1002,7 +1036,7 @@ def test_ai_content_assistant(client, monkeypatch):
         "carousel": {"title": "5 maslahat", "slides": [{"title": f"S{i}", "body": "b"} for i in range(12)], "caption": "c", "hashtags": ["#a", "#a"]},
     }
 
-    def fake_complete(db, system, text, json_mode=False, max_tokens=8000):
+    def fake_complete(db, system, text, json_mode=False, max_tokens=8000, task="chat"):
         kind = "hooks" if "10 different hooks" in system else "reels" if "Reels script" in system else "carousel"
         seen.update(system=system, text=text)
         return "```json\n" + json.dumps(answers[kind]) + "\n```", None

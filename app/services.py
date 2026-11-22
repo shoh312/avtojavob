@@ -87,7 +87,16 @@ def email_html(title: str, body: str, button: str, url: str) -> str:
 
 # ---------------------------------------------------------------- AI javoblar (Gemini yoki Claude)
 
-AI_MODEL = "claude-opus-5-5"
+# Claude modellari: 1 mln token narxi (kirish, chiqish), USD. chat — AI sotuvchi va tarjimalar (ko'p so'rov, arzon),
+# creative — AI kontent va ssenariy yaratish (kam so'rov, sifat muhim)
+CLAUDE_MODELS = {
+    "claude-haiku-5-5": (0.10, 0.50),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-opus-5-5": (4.00, 20.00),
+}
+CLAUDE_DEFAULT = {"chat": "claude-haiku-5-5", "creative": "claude-sonnet-5-5"}
+CLAUDE_SETTING = {"chat": "claude_model", "creative": "claude_model_creative"}
+AI_MODEL = CLAUDE_DEFAULT["chat"]
 GEMINI_DEFAULT_MODEL = "gemini-flash-lite-latest"
 GEMINI_FALLBACK_MODEL = "gemini-flash-latest"  # asosiy model band bo'lsa yoki kvotasi tugasa
 AI_PROVIDERS = ("gemini", "claude")
@@ -147,8 +156,26 @@ def _clean_history(history: list[dict]) -> list[dict]:
     return out
 
 
+def claude_model(db: Session, task: str = "chat") -> str:
+    m = get_setting(db, CLAUDE_SETTING.get(task, "claude_model"))
+    return m if m in CLAUDE_MODELS else CLAUDE_DEFAULT.get(task, AI_MODEL)
+
+
+def record_usage(db: Session, provider: str, model: str, task: str, inp: int, out: int) -> None:
+    """Token sarfini yozib boradi; Gemini bepul limitda — narx 0 deb olinadi."""
+    from .models import AiUsage
+
+    price = CLAUDE_MODELS.get(model, (0.0, 0.0)) if provider == "claude" else (0.0, 0.0)
+    try:
+        db.add(AiUsage(provider=provider, model=model[:60], task=task[:12], input_tokens=int(inp or 0),
+                       output_tokens=int(out or 0), cost_micro=round(inp * price[0] + out * price[1])))
+        db.commit()
+    except Exception:  # noqa: BLE001 — hisob yozilmasa ham javob ketaversin
+        db.rollback()
+
+
 def _gemini(db: Session, system: str, history: list[dict], json_mode: bool = False,
-            max_tokens: int = 2048) -> tuple[str | None, str | None]:
+            max_tokens: int = 2048, task: str = "chat") -> tuple[str | None, str | None]:
     key = get_secret(db, "gemini_api_key")
     model = (get_setting(db, "gemini_model") or GEMINI_DEFAULT_MODEL).strip()
     body = {
@@ -173,6 +200,9 @@ def _gemini(db: Session, system: str, history: list[dict], json_mode: bool = Fal
                 error = f"connection: {e}"[:300]
                 continue
             if r.status_code < 400:
+                um = data.get("usageMetadata") or {}
+                record_usage(db, "gemini", mdl, task, um.get("promptTokenCount") or 0,
+                             (um.get("candidatesTokenCount") or 0) + (um.get("thoughtsTokenCount") or 0))
                 return _gemini_text(data, json_mode)
             err = (data.get("error") or {}) if isinstance(data, dict) else {}
             error = f"HTTP {r.status_code}: {err.get('message') or r.text[:200]}"[:300]
@@ -200,24 +230,25 @@ def _gemini_text(data: dict, json_mode: bool) -> tuple[str | None, str | None]:
 
 
 def _claude(db: Session, system: str, history: list[dict], json_mode: bool = False,
-            max_tokens: int = 2000) -> tuple[str | None, str | None]:
-    client = anthropic.Anthropic(api_key=get_secret(db, "anthropic_api_key"), timeout=60, max_retries=2)
+            max_tokens: int = 2000, task: str = "chat") -> tuple[str | None, str | None]:
+    client = anthropic.Anthropic(api_key=get_secret(db, "anthropic_api_key"), timeout=90, max_retries=2)
+    model = claude_model(db, task)
+    params = {"model": model, "max_tokens": max_tokens, "system": system, "messages": history,
+              "output_config": {"effort": "low" if task == "chat" else "medium"}}
     try:
-        response = client.beta.messages.create(
-            model=AI_MODEL,
-            max_tokens=max_tokens,
-            system=system,
-            messages=history,
-            output_config={"effort": "low"},
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-        )
+        if model == "claude-haiku-5-5":  # Haiku'da server tomonidagi zaxira (fallbacks) yo'q
+            response = client.messages.create(**params)
+        else:
+            response = client.beta.messages.create(**params, betas=["server-side-fallback-2026-07-01"],
+                                                   fallbacks="default")
     except anthropic.RateLimitError as e:
         return None, f"rate limit: {e}"[:300]
     except anthropic.APIStatusError as e:
         return None, f"HTTP {e.status_code}: {e.message}"[:300]
     except anthropic.APIConnectionError as e:
         return None, f"connection: {e}"[:300]
+    usage = response.usage
+    record_usage(db, "claude", model, task, usage.input_tokens or 0, usage.output_tokens or 0)
     if response.stop_reason == "refusal":
         return None, "refusal"
     text = "".join(b.text for b in response.content if b.type == "text").strip()
@@ -311,12 +342,13 @@ def ai_generate(db: Session, business_prompt: str, history: list[dict], leads: s
 
 
 def ai_complete(db: Session, system: str, user_text: str, json_mode: bool = False,
-                max_tokens: int = 8000) -> tuple[str | None, str | None]:
-    """Bir martalik so'rov (masalan, ssenariy yaratish)."""
+                max_tokens: int = 8000, task: str = "chat") -> tuple[str | None, str | None]:
+    """Bir martalik so'rov. task="creative" — AI kontent va ssenariy yaratish (sifatliroq model)."""
     if not ai_available(db):
         return None, "not configured"
     fn = _gemini if ai_provider(db) == "gemini" else _claude
-    return fn(db, system, [{"role": "user", "content": user_text}], json_mode=json_mode, max_tokens=max_tokens)
+    return fn(db, system, [{"role": "user", "content": user_text}], json_mode=json_mode, max_tokens=max_tokens,
+              task=task)
 
 
 def ai_chat_json(db: Session, system: str, history: list[dict]) -> tuple[str | None, str | None]:

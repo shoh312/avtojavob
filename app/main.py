@@ -39,7 +39,7 @@ from .engine import (broadcast_audience, log_event, process_payload, record_mess
 from .flows import (blank_graph, build_template, generate_system, list_templates, normalize_generated, trigger_of,
                     validate_graph)
 from .models import (LANGS, SEND_KINDS, ApiToken, Broadcast, Contact, EventLog, Flow, IGAccount, Message, NodeStat, Note,
-                     ContentDraft, PlanGrant, Product, TeamTg, User, utcnow)
+                     AiUsage, ContentDraft, PlanGrant, Product, TeamTg, User, utcnow)
 from .plans import (PLANS, TRIAL_DAYS, accounts_limit, get_setting, is_active, plan_json, plans_public, products_limit,
                     usage_json,
                     set_setting)
@@ -2054,7 +2054,8 @@ def flow_generate(body: dict = Body(...), user: User = Depends(current_user), db
         err("ai_unavailable")
     stages = crm.get_stages(acc)
     products = [p.name for p in catalog.active_products(db, acc.id)]
-    text, error = services.ai_complete(db, generate_system(user.lang, stages, products), idea, json_mode=True)
+    text, error = services.ai_complete(db, generate_system(user.lang, stages, products), idea, json_mode=True,
+                                       task="creative")
     if not text:
         return JSONResponse({"error": "ai_failed", "detail": error or ""}, status_code=400)
     raw = text.strip()
@@ -2142,7 +2143,7 @@ def content_generate(body: dict = Body(...), user: User = Depends(current_user),
     data, error = None, ""
     for attempt in range(2):  # yaroqsiz JSON bo'lsa bir marta qayta so'raymiz
         ask = prompt if not attempt else prompt + "\n\nIMPORTANT: answer with ONE valid JSON object only, keep texts short."
-        text, error = services.ai_complete(db, system, ask, json_mode=True, max_tokens=8192)
+        text, error = services.ai_complete(db, system, ask, json_mode=True, max_tokens=8192, task="creative")
         if not text:
             log.warning("content generate (%s) AI error: %s", kind, error)
             break
@@ -2553,7 +2554,8 @@ def admin_set_password(user_id: int, body: dict = Body(...), admin: User = Depen
     return {"ok": True}
 
 
-PLAIN_SETTINGS = ("smtp_host", "smtp_port", "smtp_user", "smtp_from", "google_client_id", "ai_provider", "gemini_model")
+PLAIN_SETTINGS = ("smtp_host", "smtp_port", "smtp_user", "smtp_from", "google_client_id", "ai_provider", "gemini_model",
+                  "claude_model", "claude_model_creative")
 
 
 def _platform_settings(db: Session) -> dict:
@@ -2565,6 +2567,9 @@ def _platform_settings(db: Session) -> dict:
     out["google_redirect"] = _google_redirect()
     out["ai_provider"] = services.ai_provider(db)
     out["gemini_model"] = out["gemini_model"] or services.GEMINI_DEFAULT_MODEL
+    out["claude_model"] = services.claude_model(db, "chat")
+    out["claude_model_creative"] = services.claude_model(db, "creative")
+    out["claude_models"] = [{"id": k, "input": v[0], "output": v[1]} for k, v in services.CLAUDE_MODELS.items()]
     return out
 
 
@@ -2577,6 +2582,9 @@ def admin_platform(admin: User = Depends(admin_user), db: Session = Depends(get_
 def admin_platform_save(body: dict = Body(...), admin: User = Depends(admin_user), db: Session = Depends(get_db)):
     if "ai_provider" in body and body["ai_provider"] not in services.AI_PROVIDERS:
         err("bad_provider")
+    for k in ("claude_model", "claude_model_creative"):
+        if k in body and body[k] not in services.CLAUDE_MODELS:
+            err("bad_model")
     for k in PLAIN_SETTINGS:
         if k in body:
             set_setting(db, k, str(body[k] or "").strip()[:255])
@@ -2586,6 +2594,26 @@ def admin_platform_save(body: dict = Body(...), admin: User = Depends(admin_user
         if body.get(f"clear_{k}"):
             services.set_secret(db, k, "")
     return _platform_settings(db)
+
+
+@app.get("/api/admin/ai-usage")
+def admin_ai_usage(days: int = 30, admin: User = Depends(admin_user), db: Session = Depends(get_db)):
+    """AI xarajati: model va vazifa bo'yicha; 1000 ta so'rovning o'rtacha narxi."""
+    days = max(1, min(days, 365))
+    since = utcnow() - timedelta(days=days)
+    rows = db.execute(select(AiUsage.provider, AiUsage.model, AiUsage.task, func.count(AiUsage.id),
+                             func.sum(AiUsage.input_tokens), func.sum(AiUsage.output_tokens), func.sum(AiUsage.cost_micro))
+                      .where(AiUsage.created_at >= since)
+                      .group_by(AiUsage.provider, AiUsage.model, AiUsage.task)).all()
+    items = []
+    for provider, model, task, n, inp, out, cost in rows:
+        n, inp, out, cost = n or 0, inp or 0, out or 0, (cost or 0) / 1_000_000
+        items.append({"provider": provider, "model": model, "task": task, "requests": n, "input_tokens": inp,
+                      "output_tokens": out, "cost_usd": round(cost, 4),
+                      "avg_input": round(inp / n) if n else 0, "avg_output": round(out / n) if n else 0,
+                      "per_1000_usd": round(cost / n * 1000, 3) if n else 0})
+    items.sort(key=lambda x: -x["requests"])
+    return {"days": days, "items": items, "total_usd": round(sum(x["cost_usd"] for x in items), 4)}
 
 
 @app.post("/api/admin/platform/test-ai")
