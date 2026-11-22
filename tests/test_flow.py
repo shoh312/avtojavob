@@ -618,7 +618,8 @@ def test_claude_models_and_usage(client, monkeypatch):
     from app import services
     _login(client, "boss@chatflow.tj")
     r = client.put("/api/admin/platform", json={"ai_provider": "claude", "anthropic_api_key": "sk-ant-test"}, headers=H).json()
-    assert r["claude_model"] == "claude-haiku-5-5" and r["claude_model_creative"] == "claude-sonnet-5-5"
+    assert r["claude_model"] == "claude-haiku-5-5" and r["claude_model_creative"] == "claude-haiku-5-5"
+    client.put("/api/admin/platform", json={"claude_model_creative": "claude-sonnet-5-5"}, headers=H)
     assert client.put("/api/admin/platform", json={"claude_model": "gpt-9"}, headers=H).json()["error"] == "bad_model"
     calls = []
 
@@ -644,7 +645,35 @@ def test_claude_models_and_usage(client, monkeypatch):
     assert chat["avg_input"] == 4000 and chat["per_1000_usd"] == 0.6
     creative = next(x for x in u["items"] if x["task"] == "creative")
     assert creative["model"] == "claude-sonnet-5-5" and creative["per_1000_usd"] == 12.0
-    client.put("/api/admin/platform", json={"ai_provider": "gemini"}, headers=H)
+
+    # auto: avval Gemini; Gemini 503 bersa — Claude (Haiku) javob beradi
+    r = client.put("/api/admin/platform", json={"ai_provider": "auto", "gemini_api_key": "AIza-test"}, headers=H).json()
+    assert r["ai_provider"] == "auto"
+    monkeypatch.setattr(services.time, "sleep", lambda s: None)
+
+    class Resp:
+        def __init__(self, status, data):
+            self.status_code, self._data, self.text = status, data, str(data)
+
+        def json(self):
+            return self._data
+    gem = []
+    ok = {"candidates": [{"content": {"parts": [{"text": "Gemini javobi"}]}, "finishReason": "STOP"}],
+          "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 10}}
+    monkeypatch.setattr(services._http, "post", lambda url, **k: gem.append(url) or Resp(200, ok))
+    calls.clear()
+    with SessionLocal() as db:
+        assert services.ai_reply(db, "x", [{"role": "user", "content": "?"}]) == "Gemini javobi"
+    assert not calls  # Gemini ishladi — Claude'ga pul ketmadi
+    gem.clear()
+    monkeypatch.setattr(services._http, "post", lambda url, **k: gem.append(url) or Resp(503, {"error": {"message": "overloaded"}}))
+    with SessionLocal() as db:
+        assert services.ai_reply(db, "x", [{"role": "user", "content": "?"}]) == "Salom!"
+        assert len(gem) == 2 and calls[-1]["model"] == "claude-haiku-5-5"  # Gemini'da uzoq kutilmaydi
+        gem.clear()
+        services.ai_complete(db, "s", "t", task="creative", prefer_backup=True)
+        assert not gem and calls[-1]["model"] == "claude-sonnet-5-5"
+    client.put("/api/admin/platform", json={"ai_provider": "gemini", "claude_model_creative": "claude-haiku-5-5"}, headers=H)
 
 
 def test_crm_pipeline(client):
@@ -1002,7 +1031,7 @@ def test_ai_generate_flow(client, monkeypatch):
                   {"source": "m", "target": "q", "sourceHandle": "btn:go"},
                   {"source": "q", "target": "a"}, {"source": "a", "target": "t"}]}
 
-    def fake_complete(db, system, text, json_mode=False, max_tokens=8000, task="chat"):
+    def fake_complete(db, system, text, json_mode=False, max_tokens=8000, task="chat", prefer_backup=False):
         seen.update(system=system, text=text, json_mode=json_mode)
         return "```json\n" + json.dumps(ai_json) + "\n```", None
     monkeypatch.setattr(services, "ai_complete", fake_complete)
@@ -1036,7 +1065,7 @@ def test_ai_content_assistant(client, monkeypatch):
         "carousel": {"title": "5 maslahat", "slides": [{"title": f"S{i}", "body": "b"} for i in range(12)], "caption": "c", "hashtags": ["#a", "#a"]},
     }
 
-    def fake_complete(db, system, text, json_mode=False, max_tokens=8000, task="chat"):
+    def fake_complete(db, system, text, json_mode=False, max_tokens=8000, task="chat", prefer_backup=False):
         kind = "hooks" if "10 different hooks" in system else "reels" if "Reels script" in system else "carousel"
         seen.update(system=system, text=text)
         return "```json\n" + json.dumps(answers[kind]) + "\n```", None

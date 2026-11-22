@@ -94,12 +94,13 @@ CLAUDE_MODELS = {
     "claude-sonnet-5-5": (2.00, 10.00),
     "claude-opus-5-5": (4.00, 20.00),
 }
-CLAUDE_DEFAULT = {"chat": "claude-haiku-5-5", "creative": "claude-sonnet-5-5"}
+CLAUDE_DEFAULT = {"chat": "claude-haiku-5-5", "creative": "claude-haiku-5-5"}
 CLAUDE_SETTING = {"chat": "claude_model", "creative": "claude_model_creative"}
 AI_MODEL = CLAUDE_DEFAULT["chat"]
 GEMINI_DEFAULT_MODEL = "gemini-flash-lite-latest"
 GEMINI_FALLBACK_MODEL = "gemini-flash-latest"  # asosiy model band bo'lsa yoki kvotasi tugasa
-AI_PROVIDERS = ("gemini", "claude")
+# auto — avval Gemini (bepul), xato bersa Claude (zaxira)
+AI_PROVIDERS = ("gemini", "claude", "auto")
 AI_RULES = """You are the Instagram Direct assistant of a business. You reply to customers on the business's behalf.
 
 Rules:
@@ -139,8 +140,29 @@ def ai_provider(db: Session) -> str:
 
 
 def ai_available(db: Session) -> bool:
-    key = "gemini_api_key" if ai_provider(db) == "gemini" else "anthropic_api_key"
-    return bool(get_secret(db, key))
+    p = ai_provider(db)
+    if p == "auto":
+        return bool(get_secret(db, "gemini_api_key") or get_secret(db, "anthropic_api_key"))
+    return bool(get_secret(db, "gemini_api_key" if p == "gemini" else "anthropic_api_key"))
+
+
+def _ai_call(db: Session, system: str, history: list[dict], json_mode: bool = False, max_tokens: int = 2048,
+             task: str = "chat", prefer_backup: bool = False) -> tuple[str | None, str | None]:
+    """Provayderni tanlaydi. auto: Gemini → xato bo'lsa Claude. prefer_backup — Gemini'ni o'tkazib, darhol Claude."""
+    p = ai_provider(db)
+    if p != "auto":
+        fn = _gemini if p == "gemini" else _claude
+        return fn(db, system, history, json_mode=json_mode, max_tokens=max_tokens, task=task)
+    has_claude = bool(get_secret(db, "anthropic_api_key"))
+    error = ""
+    if get_secret(db, "gemini_api_key") and not (prefer_backup and has_claude):
+        # zaxira bor — Gemini'da uzoq kutmaymiz (bitta model, 2 urinish)
+        text, error = _gemini(db, system, history, json_mode=json_mode, max_tokens=max_tokens, task=task,
+                              quick=has_claude)
+        if text or not has_claude:
+            return text, error
+        log.warning("AI auto: Gemini failed (%s) — switching to Claude", error)
+    return _claude(db, system, history, json_mode=json_mode, max_tokens=max_tokens, task=task)
 
 
 def _clean_history(history: list[dict]) -> list[dict]:
@@ -175,7 +197,7 @@ def record_usage(db: Session, provider: str, model: str, task: str, inp: int, ou
 
 
 def _gemini(db: Session, system: str, history: list[dict], json_mode: bool = False,
-            max_tokens: int = 2048, task: str = "chat") -> tuple[str | None, str | None]:
+            max_tokens: int = 2048, task: str = "chat", quick: bool = False) -> tuple[str | None, str | None]:
     key = get_secret(db, "gemini_api_key")
     model = (get_setting(db, "gemini_model") or GEMINI_DEFAULT_MODEL).strip()
     body = {
@@ -188,7 +210,7 @@ def _gemini(db: Session, system: str, history: list[dict], json_mode: bool = Fal
     # Gemini band bo'lsa (503/500/504) — qisqa kutib qayta urinamiz; kvota (429) yoki baribir band bo'lsa — zaxira model
     fallback = GEMINI_FALLBACK_MODEL if model != GEMINI_FALLBACK_MODEL else GEMINI_DEFAULT_MODEL
     error = ""
-    for mdl, tries in ((model, 3), (fallback, 2)):
+    for mdl, tries in (((model, 2),) if quick else ((model, 3), (fallback, 2))):
         for attempt in range(tries):
             if attempt:
                 time.sleep(1.5 * attempt)
@@ -335,31 +357,35 @@ def ai_generate(db: Session, business_prompt: str, history: list[dict], leads: s
     if not history:
         return None, "empty history"
     system = build_system(business_prompt, leads, catalog) + language_hint(history)
-    text, error = (_gemini if ai_provider(db) == "gemini" else _claude)(db, system, history)
+    text, error = _ai_call(db, system, history)
     if error:
         log.warning("AI (%s): %s", ai_provider(db), error)
     return (text[:950] if text else None), error
 
 
 def ai_complete(db: Session, system: str, user_text: str, json_mode: bool = False,
-                max_tokens: int = 8000, task: str = "chat") -> tuple[str | None, str | None]:
+                max_tokens: int = 8000, task: str = "chat", prefer_backup: bool = False) -> tuple[str | None, str | None]:
     """Bir martalik so'rov. task="creative" — AI kontent va ssenariy yaratish (sifatliroq model)."""
     if not ai_available(db):
         return None, "not configured"
-    fn = _gemini if ai_provider(db) == "gemini" else _claude
-    return fn(db, system, [{"role": "user", "content": user_text}], json_mode=json_mode, max_tokens=max_tokens,
-              task=task)
+    return _ai_call(db, system, [{"role": "user", "content": user_text}], json_mode=json_mode, max_tokens=max_tokens,
+                    task=task, prefer_backup=prefer_backup)
 
 
-def ai_chat_json(db: Session, system: str, history: list[dict]) -> tuple[str | None, str | None]:
-    """Suhbat tarixi bilan JSON javob (AI menejer)."""
+def ai_chat_json(db: Session, system: str, history: list[dict],
+                 prefer_backup: bool = False) -> tuple[str | None, str | None]:
+    """Suhbat tarixi bilan JSON javob (AI sotuvchi)."""
     if not ai_available(db):
         return None, "not configured"
     history = _clean_history(history)
     if not history:
         return None, "empty history"
-    fn = _gemini if ai_provider(db) == "gemini" else _claude
-    return fn(db, system, history, json_mode=True, max_tokens=2048)
+    return _ai_call(db, system, history, json_mode=True, max_tokens=2048, prefer_backup=prefer_backup)
+
+
+def has_backup(db: Session) -> bool:
+    """auto rejimida Claude zaxirasi bormi (yaroqsiz javobni qayta so'rash uchun)."""
+    return ai_provider(db) == "auto" and bool(get_secret(db, "anthropic_api_key"))
 
 
 def ai_reply(db: Session, business_prompt: str, history: list[dict], leads: str = "off", catalog: str = "") -> str | None:

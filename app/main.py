@@ -2143,7 +2143,9 @@ def content_generate(body: dict = Body(...), user: User = Depends(current_user),
     data, error = None, ""
     for attempt in range(2):  # yaroqsiz JSON bo'lsa bir marta qayta so'raymiz
         ask = prompt if not attempt else prompt + "\n\nIMPORTANT: answer with ONE valid JSON object only, keep texts short."
-        text, error = services.ai_complete(db, system, ask, json_mode=True, max_tokens=8192, task="creative")
+        # auto rejimida ikkinchi urinish darhol zaxira modelga (Claude) boradi
+        text, error = services.ai_complete(db, system, ask, json_mode=True, max_tokens=8192, task="creative",
+                                           prefer_backup=bool(attempt))
         if not text:
             log.warning("content generate (%s) AI error: %s", kind, error)
             break

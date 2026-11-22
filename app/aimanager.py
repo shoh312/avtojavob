@@ -121,13 +121,24 @@ def _ask(db: Session, cfg: Cfg, account: IGAccount, contact: Contact | None, fol
     system += services.language_hint(history)
     if followup:
         history.append({"role": "user", "content": "[The customer has been silent. Write the follow-up now.]"})
-    text, error = services.ai_chat_json(db, system, history)
-    if not text:
-        log.warning("AI: %s", error)
-        return None
+    data = None
+    for backup in (False, True):  # auto: Gemini yaroqsiz JSON qaytarsa — bir marta Claude'dan so'raymiz
+        if backup and not services.has_backup(db):
+            break
+        text, error = services.ai_chat_json(db, system, history, **({"prefer_backup": True} if backup else {}))
+        if not text:
+            log.warning("AI: %s", error)
+            return None
+        data = _parse(text)
+        if data:
+            return data
+    return data
+
+
+def _parse(text: str) -> dict | None:
     try:
         raw = text.strip()
-        data = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+        data = json.loads(raw[raw.index("{"): raw.rindex("}") + 1], strict=False)
     except (ValueError, TypeError):
         # JSON o'rniga oddiy matn qaytgan bo'lsa ham javob beramiz
         return {"reply": text.strip()[:950]} if text.strip() and "{" not in text else None

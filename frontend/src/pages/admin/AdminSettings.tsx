@@ -7,7 +7,7 @@ import { Button, PageHeader, Spinner, useToast } from '../../components/ui'
 
 type Platform = {
   telegram_username: string; smtp_host: string; smtp_port: string; smtp_user: string; smtp_from: string
-  google_client_id: string; google_redirect: string; ai_provider: 'gemini' | 'claude'; gemini_model: string
+  google_client_id: string; google_redirect: string; ai_provider: 'gemini' | 'claude' | 'auto'; gemini_model: string
   smtp_password_set: boolean; google_client_secret_set: boolean; anthropic_api_key_set: boolean; gemini_api_key_set: boolean
   claude_model: string; claude_model_creative: string; claude_models: { id: string; input: number; output: number }[]
 }
@@ -141,23 +141,25 @@ export default function AdminSettings() {
         <Section icon={<Sparkles className="h-4 w-4 text-[#d97757]" />} title={t('adm.pl.ai')}>
           <div>
             <span className="label">{t('adm.pl.provider')}</span>
-            <div className="grid grid-cols-2 gap-2">
-              {(['gemini', 'claude'] as const).map(pv => (
+            <div className="grid gap-2 sm:grid-cols-3">
+              {(['auto', 'gemini', 'claude'] as const).map(pv => (
                 <button key={pv} type="button" onClick={() => set('ai_provider')(pv)}
                   className={`rounded-xl border px-3 py-2.5 text-left text-[13.5px] font-semibold ${form.ai_provider === pv ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-line hover:bg-soft'}`}>
-                  {pv === 'gemini' ? t('adm.pl.gemini') : 'Claude (Anthropic)'}
+                  {pv === 'gemini' ? t('adm.pl.gemini') : pv === 'auto' ? 'Gemini → Claude' : 'Claude (Anthropic)'}
                 </button>
               ))}
             </div>
           </div>
-          {form.ai_provider === 'gemini' ? (
+          {form.ai_provider === 'auto' && <div className="rounded-xl bg-emerald-50 px-3.5 py-2.5 text-[12.5px] leading-snug text-emerald-900">{t('adm.ai.auto_hint')}</div>}
+          {form.ai_provider !== 'claude' && (
             <>
               <p className="text-[13px] leading-relaxed text-ink-3">{t('adm.pl.gemini_hint')}</p>
               <div className="rounded-xl bg-amber-50 px-3.5 py-2.5 text-[12.5px] leading-snug text-amber-900">{t('adm.pl.free_note')}</div>
               <Secret label={t('adm.pl.key')} isSet={p.gemini_api_key_set} value={form.gemini_api_key} onChange={set('gemini_api_key')} />
               {input('gemini_model', t('adm.pl.model'), 'gemini-flash-lite-latest')}
             </>
-          ) : (
+          )}
+          {form.ai_provider !== 'gemini' && (
             <>
               <p className="text-[13px] leading-relaxed text-ink-3">{t('adm.pl.ai_hint')}</p>
               <Secret label={t('adm.pl.key')} isSet={p.anthropic_api_key_set} value={form.anthropic_api_key} onChange={set('anthropic_api_key')} />
@@ -176,7 +178,7 @@ export default function AdminSettings() {
           <AiUsage />
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => save('ai', ['ai_provider', 'gemini_model', 'gemini_api_key', 'anthropic_api_key', 'claude_model', 'claude_model_creative'])} loading={busy === 'ai'}>{t('common.save')}</Button>
-            <Button variant="secondary" onClick={testAi} loading={busy === 'testai'} disabled={!(form.ai_provider === 'gemini' ? p.gemini_api_key_set : p.anthropic_api_key_set)}>{t('adm.pl.test_ai')}</Button>
+            <Button variant="secondary" onClick={testAi} loading={busy === 'testai'} disabled={!(form.ai_provider === 'gemini' ? p.gemini_api_key_set : form.ai_provider === 'claude' ? p.anthropic_api_key_set : p.gemini_api_key_set || p.anthropic_api_key_set)}>{t('adm.pl.test_ai')}</Button>
           </div>
         </Section>
 
