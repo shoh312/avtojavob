@@ -2138,13 +2138,21 @@ def content_generate(body: dict = Body(...), user: User = Depends(current_user),
     system = content.system_prompt(kind, lang, goal, slides=slides, seconds=seconds)
     prompt = content.user_prompt(topic, acc.ai_prompt or "", catalog.catalog_text(products), captions[:10],
                                  acc.username or "", product)
-    text, error = services.ai_complete(db, system, prompt, json_mode=True, max_tokens=6000)
-    if not text:
+    data, error = None, ""
+    for attempt in range(2):  # yaroqsiz JSON bo'lsa bir marta qayta so'raymiz
+        ask = prompt if not attempt else prompt + "\n\nIMPORTANT: answer with ONE valid JSON object only, keep texts short."
+        text, error = services.ai_complete(db, system, ask, json_mode=True, max_tokens=8192)
+        if not text:
+            log.warning("content generate (%s) AI error: %s", kind, error)
+            break
+        try:
+            data = content.normalize(kind, content.parse_json(text, kind), slides)
+            break
+        except (ValueError, TypeError) as e:
+            error = f"bad json: {e}"[:200]
+            log.warning("content generate (%s) %s; answer starts: %r", kind, error, text[:300])
+    if data is None:
         return JSONResponse({"error": "ai_failed", "detail": error or ""}, status_code=400)
-    try:
-        data = content.normalize(kind, content.parse_json(text), slides)
-    except (ValueError, TypeError):
-        return JSONResponse({"error": "ai_failed", "detail": "bad json"}, status_code=400)
     params = {"goal": goal, "lang": lang, "slides": slides, "seconds": seconds, "product_id": pid or None}
     d = ContentDraft(account_id=acc.id, kind=kind, topic=topic, params_json=json.dumps(params),
                      data_json=json.dumps(data, ensure_ascii=False))

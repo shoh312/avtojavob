@@ -170,6 +170,8 @@ def _gemini(db: Session, system: str, history: list[dict], json_mode: bool = Fal
     cand = (data.get("candidates") or [{}])[0]
     if cand.get("finishReason") in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "RECITATION"):
         return None, f"blocked: {cand['finishReason']}"
+    if json_mode and cand.get("finishReason") == "MAX_TOKENS":  # chala JSON baribir yaroqsiz
+        return None, "too long (MAX_TOKENS)"
     text = "".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts", []) if not p.get("thought"))
     return text.strip() or None, None if text.strip() else "empty answer"
 

@@ -385,7 +385,9 @@ export default function Content() {
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
     } catch (e) {
       const code = e instanceof ApiError ? e.code : ''
-      toast(code === 'daily_limit' ? t('cnt.limit') : code === 'ai_unavailable' ? t('int.ai.unavailable') : t('cnt.failed'))
+      const detail = e instanceof ApiError && e.detail ? `: ${e.detail}` : ''
+      toast(code === 'daily_limit' ? t('cnt.limit') : code === 'ai_unavailable' ? t('int.ai.unavailable')
+        : code === 'ai_failed' ? `${t('cnt.failed')}${detail}` : `${t('common.error')} (${code || 'network'})`)
     } finally { setBusy(false) }
   }
   const remove = async (d: Draft) => {

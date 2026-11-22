@@ -1013,8 +1013,15 @@ def test_ai_content_assistant(client, monkeypatch):
 
     assert client.post("/api/content/generate", json={"account_id": acc, "kind": "x", "topic": "t"}, headers=H).json()["error"] == "bad_kind"
     assert client.post("/api/content/generate", json={"account_id": acc, "kind": "hooks", "topic": ""}, headers=H).json()["error"] == "empty"
-    monkeypatch.setattr(services, "ai_complete", lambda *a, **k: ("json emas", None))
-    assert client.post("/api/content/generate", json={"account_id": acc, "kind": "hooks", "topic": "t"}, headers=H).json()["error"] == "ai_failed"
+    # satr ichida yangi qator va faqat ro'yxat — baribir o'qiladi
+    assert content.parse_json('Mana: {"title": "a' + chr(10) + 'b", "hooks": []}')["title"] == "a" + chr(10) + "b"
+    assert content.parse_json('[{"title": "S1"}]', "carousel") == {"slides": [{"title": "S1"}]}
+    tries = []
+    monkeypatch.setattr(services, "ai_complete", lambda *a, **k: tries.append(1) or ("json emas", None))
+    r = client.post("/api/content/generate", json={"account_id": acc, "kind": "hooks", "topic": "t"}, headers=H).json()
+    assert r["error"] == "ai_failed" and r["detail"].startswith("bad json") and len(tries) == 2  # bir marta qayta so'raladi
+    monkeypatch.setattr(services, "ai_complete", lambda *a, **k: (None, "HTTP 429: quota"))
+    assert client.post("/api/content/generate", json={"account_id": acc, "kind": "hooks", "topic": "t"}, headers=H).json()["detail"] == "HTTP 429: quota"
     monkeypatch.setattr(content, "DAILY_LIMIT", 3)
     assert client.post("/api/content/generate", json={"account_id": acc, "kind": "hooks", "topic": "t"}, headers=H).status_code == 429
 

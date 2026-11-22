@@ -73,12 +73,22 @@ def user_prompt(topic: str, business: str, catalog: str, captions: list[str], us
     return _context(business, catalog, captions, username, product) + "\n\nTopic / idea from the owner:\n" + (topic or "(choose the best topic yourself)")
 
 
-def parse_json(text: str) -> dict:
+LIST_KEY = {"hooks": "hooks", "reels": "scenes", "carousel": "slides"}
+
+
+def parse_json(text: str, kind: str = "") -> dict:
+    """Model javobidan JSON: ``` o'ramlari, oldi-ketidagi matn va satr ichidagi yangi qatorlarga chidamli."""
     raw = (text or "").strip()
     if raw.startswith("```"):
         raw = raw.strip("`").split("\n", 1)[-1].rsplit("```", 1)[0]
-    start, end = raw.index("{"), raw.rindex("}") + 1
-    data = json.loads(raw[start:end])
+    starts = [i for i in (raw.find("{"), raw.find("[")) if i >= 0]
+    if not starts:
+        raise ValueError("no json")
+    start = min(starts)
+    end = raw.rindex("}" if raw[start] == "{" else "]") + 1
+    data = json.loads(raw[start:end], strict=False)
+    if isinstance(data, list):  # ba'zan model faqat ro'yxatni qaytaradi
+        data = {LIST_KEY.get(kind, "items"): data}
     if not isinstance(data, dict):
         raise ValueError("not an object")
     return data
