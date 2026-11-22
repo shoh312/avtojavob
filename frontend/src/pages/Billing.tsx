@@ -60,10 +60,10 @@ export default function Billing() {
         )}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        {data.plans.map(p => {
+      <div className="mx-auto grid max-w-4xl gap-4 md:grid-cols-2">
+        {data.plans.filter(p => p.key !== 'trial').map(p => {
           const popular = p.key === 'pro'
-          const isCurrent = cur.plan === p.key && cur.active
+          const isCurrent = (cur.plan === p.key || (p.key === 'pro' && cur.plan === 'trial')) && cur.active
           return (
             <div key={p.key} className={`relative flex flex-col rounded-3xl border p-6 ${p.key === 'business' ? 'border-ink bg-ink text-white' : popular ? 'border-brand-500 bg-white shadow-[0_20px_50px_-24px_rgba(229,22,31,.45)]' : 'border-line bg-white'}`}>
               {popular && <span className="absolute -top-3 left-6 rounded-full bg-brand-600 px-3 py-1 text-[11.5px] font-bold uppercase tracking-wide text-white">{t('bill.popular')}</span>}
@@ -77,7 +77,7 @@ export default function Billing() {
                   : <><span className="text-[44px] font-extrabold tabular-nums tracking-tight">{p.price}</span>
                       <span className={`text-[14px] font-medium ${p.key === 'business' ? 'text-white/60' : 'text-ink-3'}`}>{t('bill.cur')} {t('bill.per_month')}</span></>}
               </div>
-              {p.key === 'trial' && <p className="mt-2 text-[13px] text-ink-3">{t('bill.trial_d', { n: data.trial_days })}</p>}
+              {p.key === 'pro' && <p className="mt-2 flex items-center gap-1.5 text-[13px] font-medium text-emerald-700"><Gift className="h-4 w-4" />{cur.plan === 'trial' && cur.active ? t('banner.trial', { n: cur.days_left }) : t('bill.trial_d', { n: data.trial_days })}</p>}
               <ul className="mt-6 flex-1 space-y-3">
                 {[...FEATURES[p.key].map(f => t(f)), t('bill.f_ai', { n: p.ai_replies }), t('bill.f_products', { n: p.products })].map(f => (
                   <li key={f} className="flex items-start gap-2.5 text-[14px]">
@@ -90,7 +90,7 @@ export default function Billing() {
               ) : (
                 <button onClick={() => buy(p.key)}
                   className={`mt-8 inline-flex h-11 items-center justify-center gap-2 rounded-xl text-[14px] font-semibold transition ${p.key === 'business' ? 'bg-white text-ink hover:bg-brand-50' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
-                  <Send className="h-4 w-4" />{isCurrent ? t('bill.extend') : t('bill.buy')}
+                  <Send className="h-4 w-4" />{isCurrent && cur.plan !== 'trial' ? t('bill.extend') : t('bill.buy')}
                 </button>
               )}
             </div>

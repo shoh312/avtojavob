@@ -6,7 +6,7 @@ import { useI18n, type TKey } from '../i18n'
 import { api } from '../api'
 import { Logo } from './Logo'
 import { Avatar } from './ui'
-import { PlanBadge, PlanBanner, planStatus } from './Plan'
+import { PlanBadge, PlanBanner, PlanCard, planStatus } from './Plan'
 
 type NavItem = { to: string; key: TKey; icon: typeof Home; end?: boolean; owner?: boolean }
 const NAV_GROUPS: { key: TKey | null; items: NavItem[] }[] = [
@@ -158,6 +158,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       )}
       </div>
       <div className="shrink-0 border-t border-line bg-white px-4 py-3">
+        <div className="mb-3"><PlanCard onNavigate={onNavigate} /></div>
         <div className="flex items-center gap-3 px-2">
           <Link to="/app/settings" className="shrink-0 rounded-full transition hover:opacity-80"><Avatar name={me?.user.name || me?.user.email || '?'} src={me?.user.avatar_url || null} size={32} /></Link>
           <div className="min-w-0 flex-1">
