@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Activity, AlertTriangle, BarChart3, Blocks, Check, ChevronDown, ChevronsUpDown, CreditCard, Home, Inbox, Instagram, KanbanSquare, LogOut, Megaphone, Menu, Plus, RefreshCw, Settings, ShoppingBag, SlidersHorizontal, UserCog, UsersRound, Workflow, X } from 'lucide-react'
+import { Activity, AlertTriangle, BarChart3, Blocks, Check, ChevronDown, ChevronsUpDown, CreditCard, Home, Inbox, Instagram, KanbanSquare, LogOut, Megaphone, Menu, Plus, RefreshCw, Settings, ShoppingBag, SlidersHorizontal, Sparkles, UserCog, UsersRound, Workflow, X } from 'lucide-react'
 import { useAuth } from '../auth'
 import { useI18n, type TKey } from '../i18n'
 import { api } from '../api'
@@ -17,6 +17,7 @@ const NAV_GROUPS: { key: TKey | null; items: NavItem[] }[] = [
   { key: 'nav.g.sales', items: [
     { to: '/app/crm', key: 'nav.crm', icon: KanbanSquare },
     { to: '/app/products', key: 'nav.products', icon: ShoppingBag },
+    { to: '/app/content', key: 'nav.content', icon: Sparkles },
   ] },
   { key: 'nav.g.auto', items: [
     { to: '/app/flows', key: 'nav.flows', icon: Workflow },

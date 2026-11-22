@@ -973,6 +973,55 @@ def test_ai_generate_flow(client, monkeypatch):
     assert client.post("/api/flows/generate", json={"account_id": acc, "prompt": "biror narsa"}, headers=H).json()["error"] == "ai_failed"
 
 
+def test_ai_content_assistant(client, monkeypatch):
+    from app import content, services
+    acc = S["acc"]
+    monkeypatch.setattr(services, "ai_available", lambda db: True)
+    seen = {}
+    answers = {
+        "hooks": {"title": "Sumkalar", "hooks": [{"text": "Bu sumkani hamma so'rayapti", "type": "curiosity", "why": "qiziqish"}, "Oddiy matnli hook", {"text": ""}]},
+        "reels": {"title": "Sumka", "duration": "30 s", "hooks": ["H1", {"text": "H2"}],
+                  "scenes": [{"time": "0-3 s", "visual": "Qo'lda sumka", "voice": "Salom", "text": "Yangi!"}, {"bad": 1}],
+                  "cta": "Direct'ga yozing", "caption": "Izoh", "hashtags": "sumka, #dushanbe sumka"},
+        "carousel": {"title": "5 maslahat", "slides": [{"title": f"S{i}", "body": "b"} for i in range(12)], "caption": "c", "hashtags": ["#a", "#a"]},
+    }
+
+    def fake_complete(db, system, text, json_mode=False, max_tokens=8000):
+        kind = "hooks" if "10 different hooks" in system else "reels" if "Reels script" in system else "carousel"
+        seen.update(system=system, text=text)
+        return "```json\n" + json.dumps(answers[kind]) + "\n```", None
+    monkeypatch.setattr(services, "ai_complete", fake_complete)
+
+    r = client.post("/api/content/generate", json={"account_id": acc, "kind": "hooks", "topic": "Yangi sumkalar", "lang": "uz"}, headers=H).json()
+    assert [h["text"] for h in r["data"]["hooks"]] == ["Bu sumkani hamma so'rayapti", "Oddiy matnli hook"]
+    assert "Uzbek" in seen["system"] and "Yangi kolleksiya" in seen["text"]  # post matnlari kontekstga qo'shiladi
+
+    r = client.post("/api/content/generate", json={"account_id": acc, "kind": "reels", "topic": "Sumka", "seconds": 999}, headers=H).json()
+    d = r["data"]
+    assert d["hooks"] == ["H1", "H2"] and len(d["scenes"]) == 1 and d["hashtags"] == ["#sumka", "#dushanbe", "#sumka"][:2]
+    assert "90 seconds" in seen["system"]
+
+    r = client.post("/api/content/generate", json={"account_id": acc, "kind": "carousel", "topic": "Maslahat", "slides": 5}, headers=H).json()
+    assert len(r["data"]["slides"]) == 7 and r["data"]["hashtags"] == ["#a"]
+    cid = r["id"]
+    slides = [{"title": "Yangi", "body": ""}, {"title": "Oxirgi", "body": "CTA"}]
+    r = client.put(f"/api/content/{cid}", json={"data": {**r["data"], "slides": slides}}, headers=H).json()
+    assert r["data"]["slides"] == slides
+
+    lst = client.get(f"/api/content?account_id={acc}").json()
+    assert lst["used_today"] == 3 and [x["kind"] for x in lst["items"]] == ["carousel", "reels", "hooks"]
+
+    assert client.post("/api/content/generate", json={"account_id": acc, "kind": "x", "topic": "t"}, headers=H).json()["error"] == "bad_kind"
+    assert client.post("/api/content/generate", json={"account_id": acc, "kind": "hooks", "topic": ""}, headers=H).json()["error"] == "empty"
+    monkeypatch.setattr(services, "ai_complete", lambda *a, **k: ("json emas", None))
+    assert client.post("/api/content/generate", json={"account_id": acc, "kind": "hooks", "topic": "t"}, headers=H).json()["error"] == "ai_failed"
+    monkeypatch.setattr(content, "DAILY_LIMIT", 3)
+    assert client.post("/api/content/generate", json={"account_id": acc, "kind": "hooks", "topic": "t"}, headers=H).status_code == 429
+
+    assert client.delete(f"/api/content/{cid}", headers=H).json()["ok"]
+    assert len(client.get(f"/api/content?account_id={acc}").json()["items"]) == 2
+
+
 def test_ai_sales(client, monkeypatch):
     from app import aimanager, services
     from app.engine import record_message
@@ -1632,4 +1681,3 @@ def test_mcp_server(client):
     assert client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
                        headers={"Authorization": f"Bearer {ro['token']}"}).status_code == 401
     assert client.get("/mcp").status_code == 405
-

@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import instagram as ig
-from . import aimanager, catalog, crm, health, mcp, reports, services, tgbot
+from . import aimanager, catalog, content, crm, health, mcp, reports, services, tgbot
 from .config import settings
 from .db import get_db, init_db
 from .engine import contact_card as engine_contact_card
@@ -39,7 +39,7 @@ from .engine import (broadcast_audience, log_event, process_payload, record_mess
 from .flows import (blank_graph, build_template, generate_system, list_templates, normalize_generated, trigger_of,
                     validate_graph)
 from .models import (LANGS, SEND_KINDS, ApiToken, Broadcast, Contact, EventLog, Flow, IGAccount, Message, NodeStat, Note,
-                     PlanGrant, Product, TeamTg, User, utcnow)
+                     ContentDraft, PlanGrant, Product, TeamTg, User, utcnow)
 from .plans import (PLANS, TRIAL_DAYS, accounts_limit, get_setting, is_active, plan_json, plans_public,
                     set_setting)
 from .security import (decrypt, encrypt, hash_password, parse_signed_request, verify_password,
@@ -2070,6 +2070,110 @@ def flow_generate(body: dict = Body(...), user: User = Depends(current_user), db
     db.add(flow)
     db.commit()
     return {**flow_summary(flow), "errors": validate_graph(graph)}
+
+
+# ---------------------------------------------------------------- AI kontent yordamchi
+
+def _draft_json(d: ContentDraft) -> dict:
+    try:
+        data, params = json.loads(d.data_json or "{}"), json.loads(d.params_json or "{}")
+    except ValueError:
+        data, params = {}, {}
+    return {"id": d.id, "kind": d.kind, "topic": d.topic, "params": params, "data": data,
+            "title": data.get("title") or d.topic[:80], "created_at": iso(d.created_at)}
+
+
+def _owned_draft(db: Session, user: User, draft_id: int) -> ContentDraft:
+    d = db.get(ContentDraft, draft_id)
+    if not d:
+        err("not_found", 404)
+    owned_account(db, user, d.account_id)
+    return d
+
+
+@app.get("/api/content")
+def content_list(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, account_id)
+    rows = db.scalars(select(ContentDraft).where(ContentDraft.account_id == acc.id)
+                      .order_by(ContentDraft.id.desc()).limit(60)).all()
+    used = db.scalar(select(func.count(ContentDraft.id)).where(
+        ContentDraft.account_id == acc.id, ContentDraft.created_at >= utcnow() - timedelta(days=1))) or 0
+    return {"items": [_draft_json(d) for d in rows], "used_today": used, "daily_limit": content.DAILY_LIMIT,
+            "ai_available": services.ai_available(db)}
+
+
+@app.post("/api/content/generate")
+def content_generate(body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    acc = owned_account(db, user, int(body.get("account_id") or 0))
+    kind = str(body.get("kind") or "")
+    if kind not in content.KINDS:
+        err("bad_kind")
+    topic = str(body.get("topic") or "").strip()[:1500]
+    goal = str(body.get("goal") or "sell")
+    goal = goal if goal in content.GOALS else "sell"
+    lang = str(body.get("lang") or user.lang)
+    lang = lang if lang in LANGS else "ru"
+    slides = max(3, min(10, int(body.get("slides") or 7)))
+    seconds = max(15, min(90, int(body.get("seconds") or 30)))
+    if not services.ai_available(db):
+        err("ai_unavailable")
+    used = db.scalar(select(func.count(ContentDraft.id)).where(
+        ContentDraft.account_id == acc.id, ContentDraft.created_at >= utcnow() - timedelta(days=1))) or 0
+    if used >= content.DAILY_LIMIT and not user.is_admin:
+        err("daily_limit", 429)
+    products = catalog.active_products(db, acc.id)
+    product = ""
+    pid = int(body.get("product_id") or 0)
+    if pid:
+        p = next((x for x in products if x.id == pid), None)
+        if p:
+            product = catalog.catalog_text([p])
+    if not topic and not product:
+        err("empty")
+    try:  # akkaunt ovozi uchun so'nggi post matnlari (bo'lmasa ham ishlayveradi)
+        captions = [" ".join((m.get("caption") or "").split())[:300]
+                    for m in ig.list_media(decrypt(acc.access_token_enc), limit=12) if m.get("caption")]
+    except Exception:  # noqa: BLE001
+        captions = []
+    system = content.system_prompt(kind, lang, goal, slides=slides, seconds=seconds)
+    prompt = content.user_prompt(topic, acc.ai_prompt or "", catalog.catalog_text(products), captions[:10],
+                                 acc.username or "", product)
+    text, error = services.ai_complete(db, system, prompt, json_mode=True, max_tokens=6000)
+    if not text:
+        return JSONResponse({"error": "ai_failed", "detail": error or ""}, status_code=400)
+    try:
+        data = content.normalize(kind, content.parse_json(text), slides)
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "ai_failed", "detail": "bad json"}, status_code=400)
+    params = {"goal": goal, "lang": lang, "slides": slides, "seconds": seconds, "product_id": pid or None}
+    d = ContentDraft(account_id=acc.id, kind=kind, topic=topic, params_json=json.dumps(params),
+                     data_json=json.dumps(data, ensure_ascii=False))
+    db.add(d)
+    db.commit()
+    return _draft_json(d)
+
+
+@app.put("/api/content/{draft_id}")
+def content_update(draft_id: int, body: dict = Body(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Foydalanuvchi matnni tahrirlagach saqlash (masalan, karusel slaydlari)."""
+    d = _owned_draft(db, user, draft_id)
+    data = body.get("data")
+    if not isinstance(data, dict):
+        err("bad_data")
+    try:
+        d.data_json = json.dumps(content.normalize(d.kind, data, 12), ensure_ascii=False)
+    except (ValueError, TypeError):
+        err("bad_data")
+    db.commit()
+    return _draft_json(d)
+
+
+@app.delete("/api/content/{draft_id}")
+def content_delete(draft_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    d = _owned_draft(db, user, draft_id)
+    db.delete(d)
+    db.commit()
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- CRM

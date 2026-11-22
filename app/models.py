@@ -423,3 +423,17 @@ class ApiToken(Base):
     scope: Mapped[str] = mapped_column(String(10), default="read")    # read | write
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ContentDraft(Base):
+    """AI kontent yordamchi natijasi: hook'lar, reels ssenariysi yoki karusel (foydalanuvchi tahrirlashi mumkin)."""
+
+    __tablename__ = "content_drafts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("ig_accounts.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(12))  # hooks | reels | carousel
+    topic: Mapped[str] = mapped_column(Text, default="")
+    params_json: Mapped[str] = mapped_column(Text, default="{}")
+    data_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

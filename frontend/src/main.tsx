@@ -25,6 +25,7 @@ import Integrations from './pages/Integrations'
 import CrmHub from './pages/crm/Hub'
 
 import Products from './pages/Products'
+import Content from './pages/Content'
 import Team from './pages/Team'
 import { Forgot, Reset } from './pages/Recover'
 import AdminOverviewPage from './pages/admin/AdminOverview'
@@ -93,6 +94,7 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="inbox" element={<Inbox />} />
                 <Route path="crm" element={<CrmHub />} />
                 <Route path="products" element={<Products />} />
+                <Route path="content" element={<Content />} />
                 <Route path="team" element={<Team />} />
                 <Route path="broadcasts" element={<Broadcasts />} />
                 <Route path="integrations" element={<Integrations />} />
