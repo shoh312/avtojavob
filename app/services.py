@@ -7,6 +7,7 @@ import re
 import smtplib
 import socket
 import ssl
+import time
 from email.message import EmailMessage
 from urllib.parse import urlparse
 
@@ -88,6 +89,7 @@ def email_html(title: str, body: str, button: str, url: str) -> str:
 
 AI_MODEL = "claude-opus-5-5"
 GEMINI_DEFAULT_MODEL = "gemini-flash-lite-latest"
+GEMINI_FALLBACK_MODEL = "gemini-flash-latest"  # asosiy model band bo'lsa yoki kvotasi tugasa
 AI_PROVIDERS = ("gemini", "claude")
 AI_RULES = """You are the Instagram Direct assistant of a business. You reply to customers on the business's behalf.
 
@@ -156,15 +158,36 @@ def _gemini(db: Session, system: str, history: list[dict], json_mode: bool = Fal
         "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.4,
                              **({"responseMimeType": "application/json"} if json_mode else {})},
     }
-    try:
-        r = _http.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                       headers={"x-goog-api-key": key}, json=body, timeout=60)
-        data = r.json()
-    except (httpx.HTTPError, ValueError) as e:
-        return None, f"connection: {e}"[:300]
-    if r.status_code >= 400:
-        err = (data.get("error") or {}) if isinstance(data, dict) else {}
-        return None, f"HTTP {r.status_code}: {err.get('message') or r.text[:200]}"[:300]
+    # Gemini band bo'lsa (503/500/504) — qisqa kutib qayta urinamiz; kvota (429) yoki baribir band bo'lsa — zaxira model
+    fallback = GEMINI_FALLBACK_MODEL if model != GEMINI_FALLBACK_MODEL else GEMINI_DEFAULT_MODEL
+    error = ""
+    for mdl, tries in ((model, 3), (fallback, 2)):
+        for attempt in range(tries):
+            if attempt:
+                time.sleep(1.5 * attempt)
+            try:
+                r = _http.post(f"https://generativelanguage.googleapis.com/v1beta/models/{mdl}:generateContent",
+                               headers={"x-goog-api-key": key}, json=body, timeout=60)
+                data = r.json()
+            except (httpx.HTTPError, ValueError) as e:
+                error = f"connection: {e}"[:300]
+                continue
+            if r.status_code < 400:
+                return _gemini_text(data, json_mode)
+            err = (data.get("error") or {}) if isinstance(data, dict) else {}
+            error = f"HTTP {r.status_code}: {err.get('message') or r.text[:200]}"[:300]
+            if r.status_code not in GEMINI_RETRY:
+                return None, error  # kalit noto'g'ri, so'rov xato va h.k. — qayta urinish foydasiz
+            log.warning("gemini %s busy (%s), attempt %d", mdl, r.status_code, attempt + 1)
+            if r.status_code == 429:
+                break  # kvota: shu modelda kutish foyda bermaydi
+    return None, error
+
+
+GEMINI_RETRY = {429, 500, 502, 503, 504}
+
+
+def _gemini_text(data: dict, json_mode: bool) -> tuple[str | None, str | None]:
     if (data.get("promptFeedback") or {}).get("blockReason"):
         return None, f"blocked: {data['promptFeedback']['blockReason']}"
     cand = (data.get("candidates") or [{}])[0]

@@ -597,6 +597,21 @@ def test_gemini_provider(client, monkeypatch):
     with SessionLocal() as db:
         assert services.ai_reply(db, "x", [{"role": "user", "content": "?"}]) is None
 
+    # 503 "model band": kutib qayta urinadi, so'ng zaxira modelga o'tadi
+    monkeypatch.setattr(services.time, "sleep", lambda s: None)
+    urls = []
+    busy = {"error": {"message": "The model is overloaded. Please try again later."}}
+    ok = {"candidates": [{"content": {"parts": [{"text": "Zaxiradan javob"}]}, "finishReason": "STOP"}]}
+    monkeypatch.setattr(services._http, "post", lambda url, **k: urls.append(url) or (Resp(200, ok) if "flash-latest" in url else Resp(503, busy)))
+    with SessionLocal() as db:
+        assert services.ai_reply(db, "x", [{"role": "user", "content": "?"}]) == "Zaxiradan javob"
+    assert [u.split("/models/")[1].split(":")[0] for u in urls] == ["gemini-flash-lite-latest"] * 3 + ["gemini-flash-latest"]
+    urls.clear()  # kvota (429): asosiy modelda kutmasdan darhol zaxiraga
+    monkeypatch.setattr(services._http, "post", lambda url, **k: urls.append(url) or Resp(429, {"error": {"message": "quota"}}))
+    with SessionLocal() as db:
+        assert services.ai_reply(db, "x", [{"role": "user", "content": "?"}]) is None
+    assert len(urls) == 2
+
 
 def test_crm_pipeline(client):
     _login(client, "a@b.tj", "newpass123")
