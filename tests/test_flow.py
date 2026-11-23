@@ -619,7 +619,11 @@ def test_claude_models_and_usage(client, monkeypatch):
     _login(client, "boss@chatflow.tj")
     r = client.put("/api/admin/platform", json={"ai_provider": "claude", "anthropic_api_key": "sk-ant-test"}, headers=H).json()
     assert r["claude_model"] == "claude-haiku-5-5" and r["claude_model_creative"] == "claude-haiku-5-5"
-    client.put("/api/admin/platform", json={"claude_model_creative": "claude-sonnet-5-5"}, headers=H)
+    assert client.put("/api/admin/platform", json={"claude_model_creative": "claude-opus-5-5"}, headers=H).json()["error"] == "bad_model"
+    with SessionLocal() as db:  # eski sozlama bazada qolgan bo'lsa ham — Haiku
+        services.set_setting(db, "claude_model", "claude-opus-5-5")
+        assert services.claude_model(db, "chat") == "claude-haiku-5-5"
+        services.set_setting(db, "claude_model", "")
     assert client.put("/api/admin/platform", json={"claude_model": "gpt-9"}, headers=H).json()["error"] == "bad_model"
     calls = []
 
@@ -638,13 +642,13 @@ def test_claude_models_and_usage(client, monkeypatch):
         services.ai_complete(db, "s", "t", task="creative")
     assert calls[0]["model"] == "claude-haiku-5-5" and "fallbacks" not in calls[0]
     assert calls[0]["output_config"] == {"effort": "low"}
-    assert calls[1]["model"] == "claude-sonnet-5-5" and calls[1]["fallbacks"] == "default"
+    assert calls[1]["model"] == "claude-haiku-5-5" and "fallbacks" not in calls[1]
     u = client.get("/api/admin/ai-usage").json()
     chat = next(x for x in u["items"] if x["task"] == "chat" and x["provider"] == "claude")
     # 4000 kirish * $0.10/M + 400 chiqish * $0.50/M = $0.0006 -> 1000 ta javob ~ $0.60
     assert chat["avg_input"] == 4000 and chat["per_1000_usd"] == 0.6
     creative = next(x for x in u["items"] if x["task"] == "creative")
-    assert creative["model"] == "claude-sonnet-5-5" and creative["per_1000_usd"] == 12.0
+    assert creative["model"] == "claude-haiku-5-5" and creative["per_1000_usd"] == 0.6
 
     # oylik xarajat chegarasi: oshganda adminlarga bir marta xabar
     from app import plans
@@ -662,6 +666,21 @@ def test_claude_models_and_usage(client, monkeypatch):
     u = client.get("/api/admin/ai-usage").json()
     assert u["month_tjs"] > 0 and u["alert_tjs"] == 0.01
     client.put("/api/admin/platform", json={"ai_alert_tjs": "20"}, headers=H)
+
+    # serverdagi sinov skripti: 5 ta so'rov, narx va javoblarni chiqaradi
+    import io
+    import contextlib
+    from app import ai_selftest
+    orig_provider = services.ai_provider  # skript uni almashtiradi — darhol tiklaymiz
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            ai_selftest.main()
+    finally:
+        services.ai_provider = orig_provider
+    text = out.getvalue()
+    assert "claude-haiku-5-5: 4000 kirish + 400 chiqish token = $0.00060" in text, text
+    assert text.count("AI sotuvchi ·") == 4 and "AI kontent" in text and "1000 javob ≈ $0.60" in text
 
     # auto: avval Gemini; Gemini 503 bersa — Claude (Haiku) javob beradi
     r = client.put("/api/admin/platform", json={"ai_provider": "auto", "gemini_api_key": "AIza-test"}, headers=H).json()
@@ -689,7 +708,7 @@ def test_claude_models_and_usage(client, monkeypatch):
         assert len(gem) == 2 and calls[-1]["model"] == "claude-haiku-5-5"  # Gemini'da uzoq kutilmaydi
         gem.clear()
         services.ai_complete(db, "s", "t", task="creative", prefer_backup=True)
-        assert not gem and calls[-1]["model"] == "claude-sonnet-5-5"
+        assert not gem and calls[-1]["model"] == "claude-haiku-5-5"
     client.put("/api/admin/platform", json={"ai_provider": "gemini", "claude_model_creative": "claude-haiku-5-5"}, headers=H)
 
 

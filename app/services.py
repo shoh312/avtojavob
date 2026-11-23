@@ -89,10 +89,9 @@ def email_html(title: str, body: str, button: str, url: str) -> str:
 
 # Claude modellari: 1 mln token narxi (kirish, chiqish), USD. chat — AI sotuvchi va tarjimalar (ko'p so'rov, arzon),
 # creative — AI kontent va ssenariy yaratish (kam so'rov, sifat muhim)
+# Hozircha faqat Haiku (eng arzon): bazada eski sozlama qolgan bo'lsa ham boshqa model ishlatilmaydi
 CLAUDE_MODELS = {
     "claude-haiku-5-5": (0.10, 0.50),
-    "claude-sonnet-5-5": (2.00, 10.00),
-    "claude-opus-5-5": (4.00, 20.00),
 }
 CLAUDE_DEFAULT = {"chat": "claude-haiku-5-5", "creative": "claude-haiku-5-5"}
 CLAUDE_SETTING = {"chat": "claude_model", "creative": "claude_model_creative"}
@@ -314,11 +313,7 @@ def _claude(db: Session, system: str, history: list[dict], json_mode: bool = Fal
     params = {"model": model, "max_tokens": max_tokens, "system": system, "messages": history,
               "output_config": {"effort": "low" if task == "chat" else "medium"}}
     try:
-        if model == "claude-haiku-5-5":  # Haiku'da server tomonidagi zaxira (fallbacks) yo'q
-            response = client.messages.create(**params)
-        else:
-            response = client.beta.messages.create(**params, betas=["server-side-fallback-2026-07-01"],
-                                                   fallbacks="default")
+        response = client.messages.create(**params)
     except anthropic.RateLimitError as e:
         return None, f"rate limit: {e}"[:300]
     except anthropic.APIStatusError as e:
